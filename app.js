@@ -280,7 +280,7 @@
   }
   function mapUser(p){
     var rol = (p.rol === "admin" || p.rol === "supervisor") ? p.rol : "almacen";
-    return { id: String(p.id), email: String(p.email || ""), username: String(p.nombre || p.email || ""), rol: rol, activo: p.activo ? 1 : 0 };
+    return { id: String(p.id), email: String(p.email || ""), username: String(p.nombre || p.email || ""), rol: rol, cargo: String(p.cargo || "").slice(0, 40), activo: p.activo ? 1 : 0 };
   }
   function upsertResguardo(r){
     if(!UUID_RE.test(r.id)) return;
@@ -300,7 +300,7 @@
       selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente", "nombre.asc,id.asc"),
       selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc"),
       selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc"),
-      ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,activo", "email.asc") : Promise.resolve(null)
+      ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,cargo,activo", "email.asc") : Promise.resolve(null)
     ]).then(function(res){
       var all = res[0].filter(okId).map(mapEmployee);
       employees = all.filter(function(e){ return e.activo; });
@@ -328,12 +328,12 @@
     var uidSes = session && session.user_id;
     if(!uidSes || !UUID_RE.test(uidSes)) return Promise.reject(new ApiError("No se pudo identificar tu cuenta. Vuelve a iniciar sesión.", {status: 401}));
     // Filtrar por id: un admin puede leer todos los perfiles (RLS) y sin filtro llegaría otro.
-    return authed("GET", "/rest/v1/perfiles?select=id,email,nombre,rol,activo&id=eq." + uidSes + "&limit=1").then(function(rows){
+    return authed("GET", "/rest/v1/perfiles?select=id,email,nombre,rol,cargo,activo&id=eq." + uidSes + "&limit=1").then(function(rows){
       var p = Array.isArray(rows) ? rows[0] : null;
       if(!p) throw new ApiError("Tu cuenta no tiene perfil. Pide al administrador que revise la configuración.");
       if(!p.activo) throw new ApiError("Tu cuenta todavía no está activa. Pide a un administrador que la active.", {code: "inactive"});
       var u = mapUser(p);
-      ui.currentUser = { id: u.id, username: u.username, email: u.email, rol: u.rol };
+      ui.currentUser = { id: u.id, username: u.username, email: u.email, rol: u.rol, cargo: u.cargo };
       return u;
     });
   }
@@ -478,7 +478,7 @@
     '<div class="sidebarFooter"><div class="userRow">' +
       '<div class="avatar avatarLg">'+esc(initials(ui.currentUser?ui.currentUser.username:""))+'</div>' +
       '<div style="min-width:0;"><div class="userName">'+esc(ui.currentUser?ui.currentUser.username:"")+'</div>' +
-      '<div class="userRole">'+esc(ui.currentUser?(ROL_LABEL[ui.currentUser.rol]||ui.currentUser.rol):"")+'</div></div>' +
+      '<div class="userRole">'+esc(ui.currentUser?rolLabel(ui.currentUser):"")+'</div></div>' +
       '<button type="button" class="logoutBtn" data-action="logout" title="Cerrar sesión" aria-label="Cerrar sesión">'+icon("logout")+'</button>' +
     '</div></div>';
   }
@@ -942,6 +942,8 @@
   }
 
   var ROL_LABEL = { admin: "Administrador", supervisor: "Supervisor", almacen: "Almacén" };
+  // El cargo (p. ej. "Gerente") solo cambia el nombre que se muestra; los permisos los da el rol.
+  function rolLabel(u){ return (u && u.cargo) ? u.cargo : (u ? (ROL_LABEL[u.rol] || u.rol) : ""); }
   function usersTpl(){
     if(!ui.currentUser || ui.currentUser.rol !== "admin") return '<p class="empty">Solo un administrador puede ver esta sección.</p>';
     var html = '<div class="toolbar"><button class="btnGhost toolbarBtn" data-action="open-new-user">'+icon("plus")+' Nueva cuenta</button></div>';
@@ -951,7 +953,7 @@
       var self = u.id === ui.currentUser.id;
       html += '<div class="empCard"><div class="avatar avatarLg '+avatarColorClass(u.username)+'">'+esc(initials(u.username))+'</div>' +
         '<div style="min-width:0;flex:1;"><div class="name">'+esc(u.username)+'</div>' +
-          '<div style="font-size:12px;color:var(--hint);">'+esc(u.email !== u.username ? u.email+' · ' : '')+esc(ROL_LABEL[u.rol]||u.rol)+(u.activo?'':' · desactivada')+'</div></div>' +
+          '<div style="font-size:12px;color:var(--hint);">'+esc(u.email !== u.username ? u.email+' · ' : '')+esc(rolLabel(u))+(u.activo?'':' · desactivada')+'</div></div>' +
         (!self ?
           '<select data-action="user-rol" data-id="'+u.id+'" aria-label="Rol de '+esc(u.username)+'" style="width:auto;font-size:12px;">' +
             ["almacen","supervisor","admin"].map(function(r){ return '<option value="'+r+'"'+(u.rol===r?' selected':'')+'>'+ROL_LABEL[r]+'</option>'; }).join("") +
