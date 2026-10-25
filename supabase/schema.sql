@@ -83,6 +83,14 @@ create table if not exists public.perfiles (
   creado_en  timestamptz not null default now()
 );
 
+-- Cargo visible (p. ej. "Gerente"). Solo es una etiqueta: los permisos los da "rol".
+alter table public.perfiles add column if not exists cargo text not null default '';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'perfiles_cargo_len') then
+    alter table public.perfiles add constraint perfiles_cargo_len check (char_length(cargo) <= 40);
+  end if;
+end $$;
+
 create table if not exists public.colaboradores (
   id           uuid primary key default gen_random_uuid(),
   nombre       text not null check (char_length(btrim(nombre)) between 1 and 120),
@@ -307,7 +315,8 @@ begin
   if auth.uid() is not null and not app.es_admin() then
     if tg_op = 'DELETE'
        or new.rol is distinct from old.rol or new.activo is distinct from old.activo
-       or new.nombre is distinct from old.nombre or new.id is distinct from old.id then
+       or new.nombre is distinct from old.nombre or new.cargo is distinct from old.cargo
+       or new.id is distinct from old.id then
       raise exception using errcode = '42501', message = 'Solo un administrador puede modificar cuentas de usuario.';
     end if;
   end if;
