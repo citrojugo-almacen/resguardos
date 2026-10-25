@@ -348,7 +348,7 @@
   }
   function clearPrivateState(){
     employees = []; resguardos = []; tools = []; users = []; formerEmployees = {};
-    ui.pinFlow = null; ui.authFlow = null; ui.cart = []; ui.viewEmployeeToolsId = null;
+    ui.pinFlow = null; ui.authFlow = null; ui.pwFlow = null; ui.cart = []; ui.viewEmployeeToolsId = null;
     ui.showNewEmployeeModal = false; ui.showNewUserModal = false;
     ui.form = { employeeId: "", herramienta: "", cantidad: 1, occ: "", idArticulo: "", idArticuloHint: "", idArticuloMatched: false, notas: "", fechaPrestamo: "" };
     ui.empQuery = ""; ui.toolQuery = ""; ui.query = ""; ui.tableQuery = ""; ui.catQuery = ""; ui.empListQuery = "";
@@ -410,6 +410,7 @@
       check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
       pencil: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
       plus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+      key: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2"/><path d="m16 7 3 3"/><path d="m19 4 2 2"/></svg>',
       logout: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
       arrow: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
       undo: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>',
@@ -464,6 +465,7 @@
     '<div class="brandBlock">' +
       '<div class="brandRow"><img src="'+LOGO+'" alt="Citrojugo"/>' +
         '<div><div class="brandEyebrow">Citrojugo</div><div class="brandTitle">Resguardo de herramienta</div></div>' +
+        '<button type="button" class="logoutBtn mobileLogout" data-action="open-password" title="Cambiar contraseña" aria-label="Cambiar contraseña">'+icon("key")+'</button>' +
         '<button type="button" class="logoutBtn mobileLogout" data-action="logout" title="Cerrar sesión" aria-label="Cerrar sesión">'+icon("logout")+'</button>' +
       '</div>' +
       '<div class="subtitle">Registro y autorización con NIP</div>' +
@@ -479,6 +481,7 @@
       '<div class="avatar avatarLg">'+esc(initials(ui.currentUser?ui.currentUser.username:""))+'</div>' +
       '<div style="min-width:0;"><div class="userName">'+esc(ui.currentUser?ui.currentUser.username:"")+'</div>' +
       '<div class="userRole">'+esc(ui.currentUser?rolLabel(ui.currentUser):"")+'</div></div>' +
+      '<button type="button" class="logoutBtn" data-action="open-password" title="Cambiar contraseña" aria-label="Cambiar contraseña">'+icon("key")+'</button>' +
       '<button type="button" class="logoutBtn" data-action="logout" title="Cerrar sesión" aria-label="Cerrar sesión">'+icon("logout")+'</button>' +
     '</div></div>';
   }
@@ -995,6 +998,24 @@
     '</form></div>';
   }
 
+  function passwordModalTpl(){
+    var f = ui.pwFlow;
+    if(!f) return "";
+    return '' +
+    '<div class="overlay'+overlayEnter+'"><form id="form-password" class="modal" style="max-width:380px;" autocomplete="on">' +
+      '<div class="modalHead"><div style="min-width:0;"><div class="modalTitle">Cambiar contraseña</div>' +
+        '<p class="modalSub">'+esc(ui.currentUser ? ui.currentUser.email : "")+'</p></div>' +
+        '<button type="button" class="closeBtn" data-action="close-password" aria-label="Cerrar">'+icon("x")+'</button></div>' +
+      '<input type="text" autocomplete="username" value="'+esc(ui.currentUser ? ui.currentUser.email : "")+'" style="display:none" aria-hidden="true" tabindex="-1" readonly/>' +
+      '<div class="field"><label for="input-pw-current">Contraseña actual</label><input type="password" id="input-pw-current" autocomplete="current-password" maxlength="128" value="'+esc(f.current)+'" autofocus/></div>' +
+      '<div class="field"><label for="input-pw-new">Contraseña nueva</label><input type="password" id="input-pw-new" autocomplete="new-password" maxlength="128" value="'+esc(f.next)+'"/></div>' +
+      '<div class="field"><label for="input-pw-new2">Confirmar contraseña nueva</label><input type="password" id="input-pw-new2" autocomplete="new-password" maxlength="128" value="'+esc(f.next2)+'"/></div>' +
+      '<p class="hint" style="margin:-6px 0 14px;">Mínimo 10 caracteres. Usa una frase o combina letras, números y símbolos; no la compartas con nadie.</p>' +
+      (f.error ? '<p class="errorText" style="margin:-6px 0 12px;">'+icon("alert")+' '+esc(f.error)+'</p>' : '') +
+      '<button type="submit" class="btnPrimary" style="width:100%;"'+(f.pending?' disabled':'')+'>'+(f.pending?'Guardando…':'Guardar contraseña nueva')+'</button>' +
+    '</form></div>';
+  }
+
   function toastTpl(){
     if(!ui.toast) return "";
     var ic = ui.toast.type==="ok" ? icon("check") : icon("alert");
@@ -1007,6 +1028,7 @@
   var overlayEnter = "", renderStamp = {}, renderShake = false, renderPrevPinLen = 0;
   var lastTab = null, lastModalKey = "", lastPinLen = 0;
   function modalKey(){
+    if(ui.pwFlow) return "pw";
     if(ui.pinFlow) return "pin";
     if(ui.authFlow) return "auth:"+ui.authFlow.kind;
     if(ui.showNewEmployeeModal) return "emp";
@@ -1078,7 +1100,7 @@
     }
     var html = '<div class="shell"><nav class="sidebar" aria-label="Secciones">' + sidebarTpl() + '</nav>' +
       '<main class="main"><div class="content'+narrow+tabEnter+'">' + pageHeadTpl() + body + '</div></main>' +
-    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + toastTpl();
+    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + toastTpl();
     document.getElementById("app").innerHTML = html;
     if(tabEnter && lastTab !== null) window.scrollTo(0,0);
     lastTab = ui.tab; lastModalKey = mk; lastPinLen = ui.pinFlow ? ui.pinFlow.pin.length : 0;
@@ -1211,6 +1233,40 @@
       flow.pending = false;
       flow.password = "";
       flow.error = e.message;
+      render();
+    });
+  }
+
+  function submitPassword(){
+    var f = ui.pwFlow;
+    if(!f || f.pending || !ui.currentUser) return;
+    f.error = "";
+    var email = String(ui.currentUser.email || "").trim().toLowerCase();
+    if(!f.current){ f.error = "Escribe tu contraseña actual."; render(); return; }
+    if(f.next.length < 10){ f.error = "La contraseña nueva debe tener al menos 10 caracteres."; render(); return; }
+    if(f.next !== f.next2){ f.error = "Las contraseñas nuevas no coinciden."; render(); return; }
+    if(f.next === f.current){ f.error = "La contraseña nueva debe ser distinta de la actual."; render(); return; }
+    if(f.next.trim().toLowerCase() === email){ f.error = "La contraseña no puede ser tu correo."; render(); return; }
+    var locked = pwLocked(); if(locked){ f.error = locked; render(); return; }
+    f.pending = true;
+    render();
+    var flow = f;
+    authPassword(email, f.current).then(function(tmp){
+      return http("PUT", "/auth/v1/user", { token: tmp.access_token, body: { password: flow.next } })
+        .then(function(r){ authSignOut(tmp.access_token); return r; },
+              function(e){ authSignOut(tmp.access_token); throw e; });
+    }).then(function(){
+      pwOk();
+      if(ui.pwFlow !== flow) return;
+      ui.pwFlow = null;
+      toast("ok", "Contraseña actualizada. Úsala la próxima vez que inicies sesión.");
+    }, function(e){
+      if(ui.pwFlow !== flow) return;
+      flow.pending = false;
+      if(!e.network && e.code === "invalid_credentials"){ pwFailed(); flow.current = ""; flow.error = "La contraseña actual no es correcta."; }
+      else if(e.code === "same_password"){ flow.error = "La contraseña nueva debe ser distinta de la actual."; }
+      else if(e.code === "weak_password"){ flow.error = "La contraseña nueva es demasiado débil. Usa una más larga o con más variedad de caracteres."; }
+      else { flow.error = e.message; }
       render();
     });
   }
@@ -1511,6 +1567,10 @@
           break;
         case "cart-add": addToCart(); break;
         case "logout": logout(); break;
+        case "open-password":
+          ui.pwFlow = { current: "", next: "", next2: "", error: "", pending: false };
+          render(); break;
+        case "close-password": if(ui.pwFlow && !ui.pwFlow.pending){ ui.pwFlow = null; render(); } break;
         case "retry-load": loadData(); break;
         case "export-legacy": exportLegacyData(); break;
         case "clear-legacy-ask": ui.confirmClearLegacy = true; render(); break;
@@ -1573,6 +1633,9 @@
       case "input-fecha-prestamo": ui.form.fechaPrestamo = v; break;
       case "input-auth-user": if(ui.authFlow) ui.authFlow.username = v; break;
       case "input-auth-pass": if(ui.authFlow) ui.authFlow.password = v; break;
+      case "input-pw-current": if(ui.pwFlow) ui.pwFlow.current = v; break;
+      case "input-pw-new": if(ui.pwFlow) ui.pwFlow.next = v; break;
+      case "input-pw-new2": if(ui.pwFlow) ui.pwFlow.next2 = v; break;
       case "input-auth-pin": { var ap=v.replace(/\D/g,"").slice(0,4); if(ui.authFlow) ui.authFlow.pin=ap; e.target.value=ap; break; }
       case "input-auth-pin2": { var ap2=v.replace(/\D/g,"").slice(0,4); if(ui.authFlow) ui.authFlow.pin2=ap2; e.target.value=ap2; break; }
       default:
@@ -1597,6 +1660,7 @@
     if(e.target.id === "form-login") submitLogin();
     else if(e.target.id === "form-new-user") submitNewUser();
     else if(e.target.id === "form-auth") submitAuth();
+    else if(e.target.id === "form-password") submitPassword();
     else if(e.target.id === "form-new-employee") submitNewEmployee();
     else if(e.target.id === "form-new-tool") submitNewTool();
     else if(e.target.id === "form-new-resguardo") submitNewResguardo();
@@ -1606,6 +1670,7 @@
     var tid = e.target && e.target.id;
     if(e.key === "Escape"){
       if(ui.pinFlow && !ui.pinFlow.pending){ ui.pinFlow = null; render(); return; }
+      if(ui.pwFlow && !ui.pwFlow.pending){ ui.pwFlow = null; render(); return; }
       if(ui.authFlow && !ui.authFlow.pending){ ui.authFlow = null; render(); return; }
       if(ui.showNewEmployeeModal){ ui.showNewEmployeeModal = false; render(); return; }
       if(ui.showNewUserModal){ ui.showNewUserModal = false; render(); return; }
