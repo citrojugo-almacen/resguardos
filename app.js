@@ -260,6 +260,11 @@
   function mapEmployee(c){ return { id: String(c.id), numero: String(c.numero_empleado || ""), nombre: String(c.nombre || ""), area: String(c.area || ""), puesto: String(c.puesto || ""), activo: c.activo !== false, nipPendiente: !!c.nip_pendiente }; }
   function normNum(s){ return String(s || "").replace(/\s+/g, "").toUpperCase(); }
   // "Nombre · #123" para mostrar al colaborador con su número de empleado.
+  function reduceMotion(){ try{ return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }catch(e){ return false; } }
+  function findRes(id){ for(var i=0;i<resguardos.length;i++){ if(resguardos[i].id === id) return resguardos[i]; } return null; }
+  function avatarTpl(e, size){ return '<div class="avatar '+(size||"avatarLg")+' '+(e?avatarColorClass(e.nombre):"")+'">'+(e?esc(initials(e.nombre)):"?")+'</div>'; }
+  var SIDEBAR_KEY = "citrojugo_sidebar_v1", SPLASH_KEY = "citrojugo_splash_v1";
+  function readCollapsed(){ try{ return localStorage.getItem(SIDEBAR_KEY) === "1"; }catch(e){ return false; } }
   function empLabel(emp){ return emp ? emp.nombre + (emp.numero ? " · #" + emp.numero : "") : ""; }
   function empMatches(emp, q){
     if(!emp) return false;
@@ -348,7 +353,7 @@
   }
   function clearPrivateState(){
     employees = []; resguardos = []; tools = []; users = []; formerEmployees = {};
-    ui.pinFlow = null; ui.authFlow = null; ui.pwFlow = null; ui.cart = []; ui.viewEmployeeToolsId = null;
+    ui.pinFlow = null; ui.authFlow = null; ui.pwFlow = null; ui.trFlow = null; ui.cart = []; ui.viewEmployeeToolsId = null;
     ui.showNewEmployeeModal = false; ui.showNewUserModal = false;
     ui.form = { employeeId: "", herramienta: "", cantidad: 1, occ: "", idArticulo: "", idArticuloHint: "", idArticuloMatched: false, notas: "", fechaPrestamo: "" };
     ui.empQuery = ""; ui.toolQuery = ""; ui.query = ""; ui.tableQuery = ""; ui.catQuery = ""; ui.empListQuery = "";
@@ -410,6 +415,8 @@
       check: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
       pencil: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
       plus: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+      transfer: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h14"/><path d="m14 4 4 4-4 4"/><path d="M20 16H6"/><path d="m10 12-4 4 4 4"/></svg>',
+      sidebar: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><line x1="9" y1="4" x2="9" y2="20"/><path d="m15.5 10-2 2 2 2"/></svg>',
       key: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2"/><path d="m16 7 3 3"/><path d="m19 4 2 2"/></svg>',
       logout: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>',
       arrow: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
@@ -464,13 +471,14 @@
     return '' +
     '<div class="brandBlock">' +
       '<div class="brandRow"><img src="'+LOGO+'" alt="Citrojugo"/>' +
-        '<div><div class="brandEyebrow">Citrojugo</div><div class="brandTitle">Resguardo de herramienta</div></div>' +
+        '<div style="min-width:0;"><div class="brandEyebrow">Citrojugo</div><div class="brandTitle">Resguardo de herramienta</div></div>' +
+        '<button type="button" class="sideToggle" data-action="toggle-sidebar" title="Ocultar barra lateral" aria-label="Ocultar barra lateral">'+icon("sidebar")+'</button>' +
         '<button type="button" class="logoutBtn mobileLogout" data-action="open-password" title="Cambiar contraseña" aria-label="Cambiar contraseña">'+icon("key")+'</button>' +
         '<button type="button" class="logoutBtn mobileLogout" data-action="logout" title="Cerrar sesión" aria-label="Cerrar sesión">'+icon("logout")+'</button>' +
       '</div>' +
       '<div class="subtitle">Registro y autorización con NIP</div>' +
     '</div>' +
-    '<div class="navList">' + tabs.map(function(t, i){
+    '<div class="navList"><div class="navGlider" aria-hidden="true"></div>' + tabs.map(function(t, i){
       var active = ui.tab===t.id ? " active" : "";
       var badge = t.badge ? '<span class="badge">'+t.badge.toLocaleString("es-MX")+'</span>' : "";
       var section = i===3 ? '<div class="navSection">Registros</div>' : (t.id==="usuarios" ? '<div class="navSection">Administración</div>' : "");
@@ -514,10 +522,10 @@
     var recent = all.slice(0,6);
 
     var html = '<div class="metricGrid">' +
-      '<div class="metric m-lime"><div class="metricLabel">Resguardos activos</div><div class="metricValue">'+activos.length.toLocaleString("es-MX")+'</div></div>' +
-      '<div class="metric m-amber"><div class="metricLabel">Devueltos</div><div class="metricValue">'+devueltos.length.toLocaleString("es-MX")+'</div></div>' +
-      '<div class="metric m-teal"><div class="metricLabel">Colaboradores</div><div class="metricValue">'+employees.length.toLocaleString("es-MX")+'</div></div>' +
-      '<div class="metric m-plum"><div class="metricLabel">Catálogo</div><div class="metricValue">'+tools.length.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-lime"><div class="metricLabel">Resguardos activos</div><div class="metricValue" data-count="'+activos.length+'">'+activos.length.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-amber"><div class="metricLabel">Devueltos</div><div class="metricValue" data-count="'+devueltos.length+'">'+devueltos.length.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-teal"><div class="metricLabel">Colaboradores</div><div class="metricValue" data-count="'+employees.length+'">'+employees.length.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-plum"><div class="metricLabel">Catálogo</div><div class="metricValue" data-count="'+tools.length+'">'+tools.length.toLocaleString("es-MX")+'</div></div>' +
     '</div>';
 
     html += '<div class="chartsRow">';
@@ -595,7 +603,8 @@
     '<div class="resCard '+r.estado+(renderStamp[r.id]?' stamped':'')+'">' +
       '<div class="resTop">' +
         '<div style="min-width:0;"><div class="resTitle">'+esc(r.herramienta)+(r.cantidad>1?'<span class="qty">×'+r.cantidad+'</span>':'')+'</div></div>' +
-        '<span class="pill '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+'</span>' +
+        '<span class="pill '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+
+          (renderStamp[r.id] ? '<span class="burst" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>' : '')+'</span>' +
       '</div>' +
       '<div class="empRow"><div class="avatar '+(emp?avatarColorClass(emp.nombre):"")+'">'+(emp?esc(initials(emp.nombre)):"?")+'</div>' +
         '<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(emp?esc(emp.nombre):"Colaborador eliminado")+'</span>' +
@@ -617,7 +626,8 @@
         '<div class="confirmBox" style="margin:auto 0 0;"><p>¿Registrar la devolución de <b>'+esc(r.herramienta)+'</b>? Quedará a tu nombre en la bitácora.</p>' +
           '<div class="confirmActions"><button class="confirmYes" data-action="devolver-confirm" data-id="'+r.id+'"'+(ui.busy?' disabled':'')+'>'+(ui.busy?'Guardando…':'Sí, devolver')+'</button>' +
           '<button class="confirmNo" data-action="devolver-cancel">Cancelar</button></div></div>'
-        : '<div class="cardFoot" style="margin-top:auto;"><button class="btnOutline" data-action="devolver" data-id="'+r.id+'">'+icon("undo")+' Marcar devolución</button></div>') : '') +
+        : '<div class="cardFoot cardActions" style="margin-top:auto;"><button class="btnOutline" data-action="devolver" data-id="'+r.id+'">'+icon("undo")+' Devolver</button>' +
+          '<button class="btnOutline btnTransfer" data-action="transferir" data-id="'+r.id+'">'+icon("transfer")+' Transferir</button></div>') : '') +
     '</div>';
   }
 
@@ -998,6 +1008,76 @@
     '</form></div>';
   }
 
+  function transferModalTpl(){
+    var f = ui.trFlow;
+    if(!f) return "";
+    var r = findRes(f.resguardoId);
+    if(!r) return "";
+    var from = empName(r.employeeId), to = f.destId ? empName(f.destId) : null;
+    var idx = f.step === "destino" ? 0 : (f.step === "origen" ? 1 : 2);
+    var stepNames = ["Quién recibe", "NIP de quien entrega", "NIP de quien recibe"];
+    var stepper = f.step === "ok" ? "" : '<div class="trSteps" aria-label="Paso '+(idx+1)+' de 3">' + stepNames.map(function(s, i){
+      return '<span class="trStep'+(i<idx?" done":"")+(i===idx?" on":"")+'"><i>'+(i<idx?icon("check"):(i+1))+'</i><span>'+s+'</span></span>';
+    }).join('<span class="trLine"></span>') + '</div>';
+    var tool = '<div class="trTool"><span class="trToolIco">'+icon("nav_activos")+'</span><span class="trToolName">'+esc(r.herramienta)+'</span>'+(r.cantidad>1?'<span class="qty">×'+r.cantidad+'</span>':'')+'</div>';
+    var err = f.error ? '<p class="errorText" style="justify-content:center;margin:6px 0 10px;">'+icon("alert")+' '+esc(f.error)+'</p>' : '';
+    var body = "", canClose = !f.pending && f.step !== "ok";
+    if(f.step === "destino"){
+      var q = norm(f.query), nq = normNum(f.query).replace(/^#/, "");
+      var list = q ? employees.filter(function(e){
+        return e.id !== r.employeeId && (norm(e.nombre).indexOf(q) >= 0 || (e.numero && nq && normNum(e.numero).indexOf(nq) === 0));
+      }).slice(0, 6) : [];
+      body = tool +
+        '<div class="trPerson">'+avatarTpl(from)+'<div style="min-width:0;"><small>Entrega</small><b>'+esc(from?from.nombre:"—")+'</b>'+(from&&from.numero?' <span class="code">#'+esc(from.numero)+'</span>':'')+'</div></div>' +
+        '<div class="field" style="margin:16px 0 8px;"><label for="input-tr-dest">¿Quién la recibe?</label>' +
+          '<div class="searchWrap" style="margin:0;"><span class="searchIcon">'+icon("search")+'</span>' +
+          '<input type="text" id="input-tr-dest" autocomplete="off" spellcheck="false" placeholder="Número de empleado o nombre" value="'+esc(f.query)+'" autofocus/></div></div>' +
+        (list.length ? '<div class="trPickList">' + list.map(function(e, i){
+          return '<button type="button" class="trPick" style="--i:'+i+'" data-action="tr-pick" data-id="'+e.id+'">'+avatarTpl(e)+
+            '<span class="trPickName"><b>'+esc(e.nombre)+'</b><span>'+(e.numero?'<span class="code">#'+esc(e.numero)+'</span>':'')+
+            (e.nipPendiente?' <span class="trWarn">Sin NIP</span>':'')+'</span></span>'+icon("chevron")+'</button>';
+        }).join("") + '</div>'
+        : '<p class="hint center" style="margin:10px 0 4px;">'+(q ? "Sin coincidencias entre los colaboradores activos." : "Escribe el número de empleado o parte del nombre.")+'</p>') +
+        err;
+    } else if(f.step === "origen" || f.step === "destino_nip"){
+      var who = f.step === "origen" ? from : to;
+      var pin = f.step === "origen" ? f.nipO : f.nipD;
+      var dots = "";
+      for(var i=0;i<4;i++){
+        dots += '<div class="dot'+(i<pin.length?" filled":"")+(f.error?" err":"")+(i===pin.length-1 && pin.length>renderTrPrevLen ? " pop":"")+'"></div>';
+      }
+      var keys = ["1","2","3","4","5","6","7","8","9"].map(function(d){ return '<button type="button" class="pinKey" data-action="tr-digit" data-digit="'+d+'">'+d+'</button>'; }).join("");
+      body = '<div class="trStage'+(renderTrStepIn ? " in" : "")+'">' +
+        '<div class="trWho">'+avatarTpl(who, "avatarXl")+'<div class="trWhoName">'+esc(who?who.nombre:"")+'</div>' +
+          '<div class="trWhoRole"><span class="trRole '+(f.step==="origen"?"out":"in")+'">'+(f.step==="origen"?"Entrega":"Recibe")+'</span>'+(who&&who.numero?' <span class="code">#'+esc(who.numero)+'</span>':'')+'</div></div>' +
+        '<p class="hint center" style="margin:6px 0 0;font-size:14px;color:var(--label2);">'+(f.step==="origen"?"Confirma que entregas":"Confirma que recibes")+' <b>'+esc(r.herramienta)+'</b> con tu NIP</p>' +
+        '<div class="pinDots'+(renderTrShake?" shake":"")+'" role="status" aria-label="'+pin.length+' de 4 dígitos">'+dots+'</div>' +
+        err + (f.pending ? '<p class="hint center" style="margin:-6px 0 10px;">Verificando ambos NIP…</p>' : '') +
+        '<div class="pinGrid">' + keys +
+          '<button type="button" class="pinKey keyBack" data-action="tr-back" aria-label="Paso anterior">'+icon("undo")+'</button>' +
+          '<button type="button" class="pinKey" data-action="tr-digit" data-digit="0">0</button>' +
+          '<button type="button" class="pinKey keyDel" data-action="tr-del" aria-label="Borrar">'+icon("del")+'</button>' +
+        '</div></div>';
+    } else {
+      body = '<div class="trSuccess" role="status">' +
+        '<div class="trFlight">'+
+          '<div class="trEnd from">'+avatarTpl(from, "avatarXl")+'<span>'+esc(from?from.nombre.split(/[ ,]+/)[0]:"")+'</span></div>' +
+          '<div class="trTrack"><span class="trTrail"></span><span class="trToken">'+icon("nav_activos")+'</span></div>' +
+          '<div class="trEnd to">'+avatarTpl(to, "avatarXl")+'<span>'+esc(to?to.nombre.split(/[ ,]+/)[0]:"")+'</span></div>' +
+        '</div>' +
+        '<div class="trCheck">'+icon("check")+'</div>' +
+        '<div class="trOkTitle">Transferencia completada</div>' +
+        '<p class="trOkSub"><b>'+esc(r.herramienta)+'</b> ahora está a nombre de <b>'+esc(to?to.nombre:"")+'</b>.</p></div>';
+    }
+    return '' +
+    '<div class="overlay'+overlayEnter+'"><div class="modal pinModal trModal" style="max-width:420px;">' +
+      '<div class="modalHead"><div style="min-width:0;"><div class="modalTitle">Transferir herramienta</div>' +
+        '<p class="modalSub">Ambos colaboradores confirman con su NIP</p></div>' +
+        (canClose ? '<button type="button" class="closeBtn" data-action="tr-cancel" aria-label="Cancelar">'+icon("x")+'</button>' : '') + '</div>' +
+      stepper + body +
+    '</div></div>';
+  }
+
   function passwordModalTpl(){
     var f = ui.pwFlow;
     if(!f) return "";
@@ -1026,8 +1106,10 @@
   // render() reemplaza todo el DOM; estas banderas evitan que las animaciones
   // se repitan en cada tecla. Solo animan al aparecer algo nuevo.
   var overlayEnter = "", renderStamp = {}, renderShake = false, renderPrevPinLen = 0;
+  var renderTrShake = false, renderTrStepIn = false, renderTrPrevLen = 0, lastTrStep = "", lastTrLen = 0, lastGliderTop = null;
   var lastTab = null, lastModalKey = "", lastPinLen = 0;
   function modalKey(){
+    if(ui.trFlow) return "tr";
     if(ui.pwFlow) return "pw";
     if(ui.pinFlow) return "pin";
     if(ui.authFlow) return "auth:"+ui.authFlow.kind;
@@ -1048,7 +1130,45 @@
   };
   function pageHeadTpl(){
     var p = pageTitles[ui.tab]; if(!p) return "";
-    return '<header class="pageHead"><h1 class="pageTitle">'+p[0]+'</h1><p class="pageSub">'+p[1]+'</p></header>';
+    var words = p[0].split(" ").map(function(w, i){ return '<span class="w"><span style="--i:'+i+'">'+esc(w)+'</span></span>'; }).join(" ");
+    return '<header class="pageHead"><h1 class="pageTitle" aria-label="'+esc(p[0])+'">'+words+'</h1><p class="pageSub">'+p[1]+'</p></header>';
+  }
+
+  // Deslizador del menú (FLIP) y contadores del resumen. Solo efectos visuales:
+  // el texto real de cada número siempre es el valor final.
+  function afterRender(tabEntered){
+    var g = document.querySelector(".navGlider"), a = document.querySelector(".navBtn.active");
+    var desktop = !(window.matchMedia && window.matchMedia("(max-width:900px)").matches);
+    if(g){
+      if(!a || !desktop){ g.style.display = "none"; }
+      else {
+        var top = a.offsetTop;
+        g.style.display = "block"; g.style.height = a.offsetHeight + "px"; g.style.transform = "translateY(" + top + "px)";
+        if(lastGliderTop !== null && lastGliderTop !== top && g.animate && !reduceMotion()){
+          g.animate([{ transform: "translateY(" + lastGliderTop + "px)" }, { transform: "translateY(" + top + "px)" }],
+                    { duration: 420, easing: "cubic-bezier(0.32,0.72,0,1)" });
+        }
+        lastGliderTop = top;
+      }
+    }
+    if(tabEntered && ui.tab === "dashboard" && !reduceMotion()){
+      Array.prototype.forEach.call(document.querySelectorAll(".metricValue[data-count]"), function(el, i){
+        var to = parseInt(el.getAttribute("data-count"), 10) || 0;
+        if(to <= 0 || !el.parentNode) return;
+        var fx = document.createElement("span");
+        fx.className = "countFx"; fx.setAttribute("aria-hidden", "true"); fx.textContent = "0";
+        el.parentNode.style.position = "relative";
+        fx.style.top = el.offsetTop + "px"; fx.style.left = el.offsetLeft + "px"; fx.style.fontSize = getComputedStyle(el).fontSize;
+        el.parentNode.appendChild(fx); el.classList.add("counting");
+        var t0 = performance.now() + i * 90, dur = 1100;
+        (function step(now){
+          var p = Math.max(0, Math.min(1, (now - t0) / dur)), e = 1 - Math.pow(1 - p, 4);
+          fx.textContent = Math.round(to * e).toLocaleString("es-MX");
+          if(p < 1 && fx.isConnected) requestAnimationFrame(step);
+          else { el.classList.remove("counting"); if(fx.parentNode) fx.parentNode.removeChild(fx); }
+        })(performance.now());
+      });
+    }
   }
 
   var tabRenderers = {
@@ -1088,6 +1208,13 @@
     renderShake = !!(ui.pinFlow && ui.pinFlow.shake);
     if(ui.pinFlow) ui.pinFlow.shake = false;
     renderPrevPinLen = lastPinLen;
+    var trf = ui.trFlow;
+    renderTrShake = !!(trf && trf.shake); if(trf) trf.shake = false;
+    var trStepNow = trf ? trf.step : "";
+    renderTrStepIn = !!(trf && trStepNow !== lastTrStep && lastTrStep !== "");
+    var trLen = trf ? (trf.step === "origen" ? trf.nipO.length : trf.nipD.length) : 0;
+    renderTrPrevLen = (trStepNow === lastTrStep) ? lastTrLen : 0;
+    lastTrStep = trStepNow; lastTrLen = trLen;
     var body;
     if(ui.loading){
       body = '<div class="empty" role="status">Cargando información…</div>';
@@ -1098,12 +1225,14 @@
       body = (ui.offline ? '<p class="errorText" role="status" style="margin:0 0 12px;">'+icon("alert")+' Sin conexión con el servidor. Lo que ves puede no estar al día y no se podrán guardar cambios.</p>' : '') +
         (tabRenderers[ui.tab] ? tabRenderers[ui.tab]() : "");
     }
-    var html = '<div class="shell"><nav class="sidebar" aria-label="Secciones">' + sidebarTpl() + '</nav>' +
+    var html = '<div class="shell'+(ui.sidebarCollapsed?' collapsed':'')+'"><nav class="sidebar" aria-label="Secciones">' + sidebarTpl() + '</nav>' +
+      '<button type="button" class="railLogo" data-action="toggle-sidebar" title="Mostrar barra lateral" aria-label="Mostrar barra lateral"><img src="'+LOGO+'" alt="Citrojugo"/></button>' +
       '<main class="main"><div class="content'+narrow+tabEnter+'">' + pageHeadTpl() + body + '</div></main>' +
-    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + toastTpl();
+    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + toastTpl();
     document.getElementById("app").innerHTML = html;
     if(tabEnter && lastTab !== null) window.scrollTo(0,0);
     lastTab = ui.tab; lastModalKey = mk; lastPinLen = ui.pinFlow ? ui.pinFlow.pin.length : 0;
+    afterRender(!!tabEnter);
     if(overlayEnter && !activeId){
       var af = document.querySelector(".overlay [autofocus]");
       if(af) af.focus();
@@ -1316,6 +1445,91 @@
   // Devolución: la registra el usuario con sesión iniciada (almacén, supervisor o
   // admin). La base valida que la cuenta esté activa y firma la bitácora con su
   // identidad; no se pide la contraseña de un supervisor.
+  // ---------- Transferencia entre colaboradores (NIP de ambos) ----------
+  function openTransfer(id){
+    var r = findRes(id);
+    if(!r || r.estado !== "activo") return;
+    ui.confirmReturnId = null;
+    ui.trFlow = { step: "destino", resguardoId: id, query: "", destId: null, nipO: "", nipD: "", error: "", pending: false, shake: false, requestId: newRequestId() };
+    render();
+  }
+  function trMatches(f){
+    var r = findRes(f.resguardoId); if(!r) return [];
+    var q = norm(f.query), nq = normNum(f.query).replace(/^#/, "");
+    if(!q) return [];
+    var exact = employees.filter(function(e){ return e.id !== r.employeeId && e.numero && normNum(e.numero) === nq; });
+    if(exact.length === 1) return exact;
+    return employees.filter(function(e){ return e.id !== r.employeeId && (norm(e.nombre).indexOf(q) >= 0 || (e.numero && nq && normNum(e.numero).indexOf(nq) === 0)); });
+  }
+  function trPick(id){
+    var f = ui.trFlow; if(!f || f.pending) return;
+    var e = empName(id), r = findRes(f.resguardoId);
+    if(!e || !r || e.id === r.employeeId) return;
+    f.destId = id; f.error = ""; f.nipO = ""; f.nipD = ""; f.step = "origen";
+    render();
+  }
+  function trPress(d){
+    var f = ui.trFlow; if(!f || f.pending) return;
+    if(f.step === "origen"){
+      if(f.nipO.length >= 4) return;
+      f.nipO += d; f.error = ""; render();
+      if(f.nipO.length === 4) setTimeout(function(){ if(ui.trFlow === f && f.step === "origen" && f.nipO.length === 4){ f.step = "destino_nip"; f.nipD = ""; render(); } }, 180);
+    } else if(f.step === "destino_nip"){
+      if(f.nipD.length >= 4) return;
+      f.nipD += d; f.error = ""; render();
+      if(f.nipD.length === 4) setTimeout(function(){ submitTransfer(f); }, 150);
+    }
+  }
+  function trDel(){
+    var f = ui.trFlow; if(!f || f.pending) return;
+    if(f.step === "origen") f.nipO = f.nipO.slice(0, -1);
+    else if(f.step === "destino_nip") f.nipD = f.nipD.slice(0, -1);
+    render();
+  }
+  function trBack(){
+    var f = ui.trFlow; if(!f || f.pending) return;
+    if(f.step === "destino_nip"){ f.step = "origen"; f.nipO = ""; f.nipD = ""; }
+    else if(f.step === "origen"){ f.step = "destino"; f.destId = null; f.nipO = ""; }
+    f.error = ""; render();
+  }
+  function submitTransfer(f){
+    if(ui.trFlow !== f || f.pending || f.nipO.length !== 4 || f.nipD.length !== 4) return;
+    f.pending = true; render();
+    rpc("transferir_resguardo", {
+      p_resguardo_id: f.resguardoId, p_destino_id: f.destId,
+      p_nip_origen: f.nipO, p_nip_destino: f.nipD, p_solicitud: f.requestId
+    }).then(function(res){
+      if(ui.trFlow !== f) return;
+      f.pending = false;
+      if(!res || !res.ok){
+        if(res && res.quien === "origen"){ f.step = "origen"; f.nipO = ""; f.nipD = ""; }
+        else { f.step = "destino_nip"; f.nipD = ""; }
+        f.error = (res && res.mensaje) || "No se pudo transferir. Intenta de nuevo.";
+        f.shake = true; render();
+        return;
+      }
+      if(res.anterior) upsertResguardo(mapResguardo(res.anterior));
+      var nuevo = res.nuevo ? mapResguardo(res.nuevo) : null;
+      if(nuevo) upsertResguardo(nuevo);
+      var to = empName(f.destId), tool = nuevo ? nuevo.herramienta : "La herramienta";
+      f.nipO = ""; f.nipD = ""; f.step = "ok";
+      render();
+      setTimeout(function(){
+        if(ui.trFlow !== f) return;
+        ui.trFlow = null;
+        ui.tab = "activos"; ui.query = ""; ui.visible.activos = ui.pageSize;
+        ui.justStamped = nuevo ? [nuevo.id] : [];
+        toast("ok", "Listo: " + tool + " quedó a nombre de " + (to ? to.nombre : "el colaborador") + ".");
+      }, reduceMotion() ? 900 : 2000);
+    }, function(e){
+      if(ui.trFlow !== f) return;
+      if(e.status === 401){ onSessionLost(); return; }
+      f.pending = false; f.nipD = ""; f.shake = true; f.step = "destino_nip";
+      f.error = e.network ? "Sin conexión. Revisa tu internet e intenta de nuevo; no se registrará duplicado." : e.message;
+      render();
+    });
+  }
+
   function confirmReturn(id){ ui.confirmReturnId = id; render(); }
   function submitReturn(id){
     if(ui.busy) return;
@@ -1507,7 +1721,7 @@
   }, 30000);
   // Refresco silencioso para ver lo que capturan otras computadoras.
   function maybeRefresh(){
-    if(ui.currentUser && !ui.loading && !ui.pinFlow && !ui.authFlow && !ui.busy && Date.now() - lastLoadAt > 60000){
+    if(ui.currentUser && !ui.loading && !ui.pinFlow && !ui.authFlow && !ui.trFlow && !ui.busy && Date.now() - lastLoadAt > 60000){
       loadData({silent:true});
     }
   }
@@ -1542,6 +1756,21 @@
         case "cancel-delete-tool": ui.confirmDeleteToolId = null; render(); break;
         case "confirm-delete-tool": deleteTool(id); break;
         case "devolver": confirmReturn(id); break;
+        case "transferir": openTransfer(id); break;
+        case "tr-pick": trPick(id); break;
+        case "tr-digit": trPress(actionEl.dataset.digit); break;
+        case "tr-del": trDel(); break;
+        case "tr-back": trBack(); break;
+        case "tr-cancel": if(ui.trFlow && !ui.trFlow.pending && ui.trFlow.step !== "ok"){ ui.trFlow = null; render(); } break;
+        case "toggle-sidebar": {
+          ui.sidebarCollapsed = !ui.sidebarCollapsed;
+          try{ localStorage.setItem(SIDEBAR_KEY, ui.sidebarCollapsed ? "1" : "0"); }catch(err){}
+          var sh = document.querySelector(".shell");
+          if(sh) sh.classList.toggle("collapsed", ui.sidebarCollapsed);
+          var nextFocus = document.querySelector(ui.sidebarCollapsed ? ".railLogo" : ".sideToggle");
+          if(nextFocus) setTimeout(function(){ try{ nextFocus.focus({ preventScroll: true }); }catch(err){} }, 60);
+          break;
+        }
         case "devolver-cancel": ui.confirmReturnId = null; render(); break;
         case "devolver-confirm": submitReturn(id); break;
         case "pin-digit": pinPress(actionEl.dataset.digit); break;
@@ -1634,6 +1863,7 @@
       case "input-auth-user": if(ui.authFlow) ui.authFlow.username = v; break;
       case "input-auth-pass": if(ui.authFlow) ui.authFlow.password = v; break;
       case "input-pw-current": if(ui.pwFlow) ui.pwFlow.current = v; break;
+      case "input-tr-dest": if(ui.trFlow){ ui.trFlow.query = v; ui.trFlow.error = ""; render(); } break;
       case "input-pw-new": if(ui.pwFlow) ui.pwFlow.next = v; break;
       case "input-pw-new2": if(ui.pwFlow) ui.pwFlow.next2 = v; break;
       case "input-auth-pin": { var ap=v.replace(/\D/g,"").slice(0,4); if(ui.authFlow) ui.authFlow.pin=ap; e.target.value=ap; break; }
@@ -1670,6 +1900,7 @@
     var tid = e.target && e.target.id;
     if(e.key === "Escape"){
       if(ui.pinFlow && !ui.pinFlow.pending){ ui.pinFlow = null; render(); return; }
+      if(ui.trFlow && !ui.trFlow.pending && ui.trFlow.step !== "ok"){ ui.trFlow = null; render(); return; }
       if(ui.pwFlow && !ui.pwFlow.pending){ ui.pwFlow = null; render(); return; }
       if(ui.authFlow && !ui.authFlow.pending){ ui.authFlow = null; render(); return; }
       if(ui.showNewEmployeeModal){ ui.showNewEmployeeModal = false; render(); return; }
@@ -1683,14 +1914,87 @@
       addToCart();
       return;
     }
+    if(tid === "input-tr-dest" && e.key === "Enter" && ui.trFlow){
+      e.preventDefault();
+      var m = trMatches(ui.trFlow);
+      if(m.length === 1) trPick(m[0].id);
+      else { ui.trFlow.error = m.length ? "Hay varias coincidencias: elige a la persona de la lista." : "No se encontró a ese colaborador."; render(); }
+      return;
+    }
+    if(ui.trFlow && (ui.trFlow.step === "origen" || ui.trFlow.step === "destino_nip") && !ui.trFlow.pending){
+      if(/^[0-9]$/.test(e.key)){ e.preventDefault(); trPress(e.key); }
+      else if(e.key === "Backspace" || e.key === "Delete"){ e.preventDefault(); trDel(); }
+      return;
+    }
     if(!ui.pinFlow || ui.pinFlow.pending) return;
     if(/^[0-9]$/.test(e.key)){ e.preventDefault(); pinPress(e.key); }
     else if(e.key === "Backspace" || e.key === "Delete"){ e.preventDefault(); pinDel(); }
   });
 
+  // Onda al presionar botones (solo efecto visual; no cambia el clic).
+  document.addEventListener("pointerdown", function(e){
+    var b = e.target && e.target.closest ? e.target.closest(".btnPrimary,.btnOutline,.btnGhost,.pinKey,.trPick") : null;
+    if(!b || b.disabled || reduceMotion()) return;
+    var rc = b.getBoundingClientRect(), s = Math.max(rc.width, rc.height) * 2.2;
+    var sp = document.createElement("span");
+    sp.className = "ripple";
+    sp.style.width = sp.style.height = s + "px";
+    sp.style.left = (e.clientX - rc.left - s / 2) + "px";
+    sp.style.top = (e.clientY - rc.top - s / 2) + "px";
+    b.appendChild(sp);
+    setTimeout(function(){ if(sp.parentNode) sp.parentNode.removeChild(sp); }, 650);
+  }, { passive: true });
+
+  // Animación de entrada (una vez por sesión del navegador; se salta con clic o tecla).
+  function showSplash(){
+    var skip = reduceMotion();
+    try{ if(sessionStorage.getItem(SPLASH_KEY)) skip = true; sessionStorage.setItem(SPLASH_KEY, "1"); }catch(e){}
+    if(skip) return;
+    var drops = "";
+    for(var i=0;i<16;i++){
+      drops += '<i style="--a:' + (i * 22.5 + (i % 2 ? 7 : -7)) + 'deg;--d:' + (170 + (i * 37) % 120) + 'px;--s:' + (9 + (i * 5) % 12) + 'px;--dl:' + (540 + (i * 29) % 140) + 'ms"></i>';
+    }
+    var word = "Citrojugo".split("").map(function(c, i){ return '<span style="--i:' + i + '">' + c + '</span>'; }).join("");
+    var d = document.createElement("div");
+    d.className = "splash"; d.setAttribute("aria-hidden", "true");
+    d.innerHTML = '<div class="splashGlow"></div><div class="splashRings"><span></span><span></span><span></span></div>' +
+      '<div class="splashDrops">' + drops + '</div>' +
+      '<div class="splashCore"><img class="splashLogo" src="' + LOGO + '" alt=""/></div>' +
+      '<div class="splashWord">' + word + '</div><div class="splashSub">Resguardo de herramienta</div>';
+    document.body.appendChild(d);
+    document.body.classList.add("splashing");
+    var done = false, timer = null;
+    function finish(){
+      if(done) return; done = true; clearTimeout(timer);
+      document.removeEventListener("keydown", onKey, true);
+      var target = document.querySelector(".loginBrand img") || document.querySelector(".brandRow img");
+      var logo = d.querySelector(".splashLogo");
+      document.body.classList.remove("splashing");
+      document.body.classList.add("afterSplash", "flying");
+      if(target && logo && logo.animate){
+        var a = logo.getBoundingClientRect(), b = target.getBoundingClientRect();
+        if(b.width > 0){
+          var dx = (b.left + b.width / 2) - (a.left + a.width / 2), dy = (b.top + b.height / 2) - (a.top + a.height / 2);
+          logo.animate([{ transform: "translate(0,0) scale(1) rotate(0deg)" },
+                        { transform: "translate(" + dx + "px," + dy + "px) scale(" + (b.width / a.width) + ") rotate(360deg)" }],
+                       { duration: 680, easing: "cubic-bezier(0.32,0.72,0,1)", fill: "forwards" });
+        }
+      }
+      d.classList.add("out");
+      setTimeout(function(){ document.body.classList.remove("flying"); }, 660);
+      setTimeout(function(){ if(d.parentNode) d.parentNode.removeChild(d); setTimeout(function(){ document.body.classList.remove("afterSplash"); }, 900); }, 760);
+    }
+    function onKey(){ finish(); }
+    timer = setTimeout(finish, 2300);
+    d.addEventListener("click", finish);
+    document.addEventListener("keydown", onKey, true);
+  }
+
   // ---------- Init ----------
   // Si la pestaña ya tenía sesión (recarga), se restaura con el refresh token.
   (function init(){
+    ui.sidebarCollapsed = readCollapsed();
+    showSplash();
     if(!configOk()){ ui.booting = false; render(); return; }
     var hasStored = false;
     try{ hasStored = !!sessionStorage.getItem(SESSION_KEY); }catch(e){}

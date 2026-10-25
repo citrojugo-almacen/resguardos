@@ -541,6 +541,165 @@ begin
   return app.resguardo_json(v_row);
 end $$;
 
+-- ---------- Verificación de NIP reutilizable (uso interno) ----------
+-- Devuelve NULL si el NIP es correcto (y reinicia sus contadores) o un
+-- jsonb {ok:false, error, mensaje} si no. Aplica el mismo bloqueo por
+-- intentos y deja la misma bitácora que crear_resguardo.
+create or replace function app.verificar_nip(p_colaborador_id uuid, p_nip text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_cfg app.ajustes%rowtype;
+  v_nip app.colaborador_nip%rowtype;
+  v_col public.colaboradores%rowtype;
+  v_min int;
+begin
+  select * into v_cfg from app.ajustes where id = 1;
+  select * into v_col from public.colaboradores where id = p_colaborador_id;
+  if p_nip is null or p_nip !~ '^[0-9]{4}$' then
+    return jsonb_build_object('ok', false, 'error', 'nip_formato', 'mensaje', 'El NIP debe tener 4 dígitos.');
+  end if;
+  select * into v_nip from app.colaborador_nip where colaborador_id = p_colaborador_id for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'sin_nip',
+      'mensaje', v_col.nombre || ' aún no tiene NIP asignado. Un supervisor debe asignárselo (Colaboradores → NIP).');
+  end if;
+  if v_nip.bloqueado_hasta is not null and v_nip.bloqueado_hasta > now() then
+    perform app.log('nip_intento_bloqueado', 'colaborador', p_colaborador_id::text, jsonb_build_object('bloqueado_hasta', v_nip.bloqueado_hasta));
+    return jsonb_build_object('ok', false, 'error', 'bloqueado', 'bloqueado_hasta', v_nip.bloqueado_hasta,
+      'mensaje', 'El NIP de ' || v_col.nombre || ' está bloqueado por intentos fallidos. Intenta después de las ' ||
+                 to_char(v_nip.bloqueado_hasta at time zone v_cfg.zona_horaria, 'HH24:MI') || '.');
+  end if;
+  if extensions.crypt(p_nip, v_nip.nip_hash) is distinct from v_nip.nip_hash then
+    v_nip.intentos_fallidos := v_nip.intentos_fallidos + 1;
+    if v_nip.intentos_fallidos >= v_cfg.nip_max_intentos then
+      v_nip.bloqueos := v_nip.bloqueos + 1;
+      v_min := least(v_cfg.nip_bloqueo_minutos * power(2, least(v_nip.bloqueos - 1, 10))::int, v_cfg.nip_bloqueo_max_minutos);
+      v_nip.bloqueado_hasta := now() + make_interval(mins => v_min);
+      v_nip.intentos_fallidos := 0;
+    end if;
+    update app.colaborador_nip
+       set intentos_fallidos = v_nip.intentos_fallidos, bloqueos = v_nip.bloqueos,
+           bloqueado_hasta = v_nip.bloqueado_hasta, actualizado_en = now()
+     where colaborador_id = p_colaborador_id;
+    perform app.log('nip_incorrecto', 'colaborador', p_colaborador_id::text,
+      jsonb_build_object('colaborador', v_col.nombre, 'intentos', v_nip.intentos_fallidos, 'accion', 'transferencia'));
+    if v_nip.bloqueado_hasta is not null and v_nip.bloqueado_hasta > now() then
+      perform app.log('nip_bloqueado', 'colaborador', p_colaborador_id::text,
+        jsonb_build_object('colaborador', v_col.nombre, 'minutos', v_min, 'bloqueado_hasta', v_nip.bloqueado_hasta));
+      return jsonb_build_object('ok', false, 'error', 'bloqueado', 'bloqueado_hasta', v_nip.bloqueado_hasta,
+        'mensaje', 'NIP de ' || v_col.nombre || ' incorrecto. Se bloqueó por ' || v_min || ' minutos por seguridad.');
+    end if;
+    return jsonb_build_object('ok', false, 'error', 'nip_incorrecto',
+      'intentos_restantes', v_cfg.nip_max_intentos - v_nip.intentos_fallidos,
+      'mensaje', 'NIP de ' || v_col.nombre || ' incorrecto. Le quedan ' || (v_cfg.nip_max_intentos - v_nip.intentos_fallidos) || ' intento(s).');
+  end if;
+  if v_nip.nip_importado and not v_cfg.permitir_nip_importado then
+    return jsonb_build_object('ok', false, 'error', 'nip_pendiente',
+      'mensaje', v_col.nombre || ' necesita un NIP nuevo. Pide a un supervisor que se lo asigne.');
+  end if;
+  if v_nip.nip_por_defecto and not v_cfg.permitir_nip_0000 then
+    return jsonb_build_object('ok', false, 'error', 'nip_pendiente',
+      'mensaje', v_col.nombre || ' aún tiene el NIP 0000. Un supervisor debe asignarle un NIP nuevo.');
+  end if;
+  update app.colaborador_nip set intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
+   where colaborador_id = p_colaborador_id;
+  return null;
+end $$;
+
+-- ---------- Transferencia de herramienta entre colaboradores ----------
+-- El colaborador que entrega y el que recibe confirman con su NIP. El
+-- resguardo original se cierra ("transferido a …") y se crea uno nuevo a
+-- nombre de quien recibe, en la misma transacción. Cualquier usuario activo.
+create or replace function public.transferir_resguardo(
+  p_resguardo_id uuid,
+  p_destino_id   uuid,
+  p_nip_origen   text,
+  p_nip_destino  text,
+  p_solicitud    uuid default null   -- id único del navegador: un reintento no duplica
+) returns jsonb
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_uid    uuid := auth.uid();
+  v_user   text;
+  v_cfg    app.ajustes%rowtype;
+  v_row    public.resguardos%rowtype;
+  v_new    public.resguardos%rowtype;
+  v_orig   public.colaboradores%rowtype;
+  v_dest   public.colaboradores%rowtype;
+  v_err    jsonb;
+  v_fallos int; v_dia int;
+  v_grupo  uuid := coalesce(p_solicitud, gen_random_uuid());
+  v_nota   text;
+begin
+  perform app.exigir(array['admin', 'supervisor', 'almacen']);
+  v_user := app.nombre_actual();
+  select * into v_cfg from app.ajustes where id = 1;
+
+  -- Reintento de una transferencia que ya se guardó
+  if p_solicitud is not null and exists (select 1 from public.resguardos where grupo_id = p_solicitud) then
+    select * into v_new from public.resguardos where grupo_id = p_solicitud limit 1;
+    if v_new.colaborador_id <> p_destino_id then
+      raise exception using errcode = '22023', message = 'Solicitud duplicada no válida.';
+    end if;
+    select * into v_row from public.resguardos where id = p_resguardo_id;
+    return jsonb_build_object('ok', true, 'repetida', true, 'anterior', app.resguardo_json(v_row), 'nuevo', app.resguardo_json(v_new));
+  end if;
+
+  if p_nip_origen is null or p_nip_origen !~ '^[0-9]{4}$' or p_nip_destino is null or p_nip_destino !~ '^[0-9]{4}$' then
+    return jsonb_build_object('ok', false, 'error', 'nip_formato', 'mensaje', 'Cada NIP debe tener 4 dígitos.');
+  end if;
+
+  select * into v_row from public.resguardos where id = p_resguardo_id and estado = 'activo' for update;
+  if not found then
+    raise exception using errcode = '22023', message = 'Ese resguardo no existe o ya no está activo.';
+  end if;
+  select * into v_orig from public.colaboradores where id = v_row.colaborador_id;
+  select * into v_dest from public.colaboradores where id = p_destino_id and activo;
+  if not found then
+    raise exception using errcode = '22023', message = 'El colaborador que recibe no existe o está dado de baja.';
+  end if;
+  if v_dest.id = v_orig.id then
+    raise exception using errcode = '22023', message = 'Elige a un colaborador distinto del que tiene la herramienta.';
+  end if;
+
+  -- Límite por cuenta de usuario (igual que en crear_resguardo)
+  select count(*) filter (where ts > now() - interval '1 hour'), count(*) into v_fallos, v_dia
+    from public.bitacora
+   where usuario_id = v_uid and accion = 'nip_incorrecto' and ts > now() - interval '24 hours';
+  if v_fallos >= v_cfg.usuario_max_fallos_hora or v_dia >= v_cfg.usuario_max_fallos_dia then
+    perform app.log('nip_limite_usuario', 'resguardo', p_resguardo_id::text, jsonb_build_object('fallos_ultima_hora', v_fallos));
+    return jsonb_build_object('ok', false, 'error', 'limite_usuario',
+      'mensaje', 'Demasiados NIP incorrectos desde esta cuenta. Espera o avisa a un administrador.');
+  end if;
+
+  v_err := app.verificar_nip(v_orig.id, p_nip_origen);
+  if v_err is not null then return v_err || jsonb_build_object('quien', 'origen'); end if;
+  v_err := app.verificar_nip(v_dest.id, p_nip_destino);
+  if v_err is not null then return v_err || jsonb_build_object('quien', 'destino'); end if;
+
+  update public.resguardos
+     set estado = 'devuelto', fecha_devolucion = app.hoy(),
+         devuelto_por = left(v_user || ' (transferido a ' || v_dest.nombre || ')', 200),
+         devuelto_por_id = v_uid, actualizado_en = now()
+   where id = v_row.id
+  returning * into v_row;
+
+  v_nota := left('Transferido de ' || v_orig.nombre ||
+                 case when v_orig.numero_empleado <> '' then ' (#' || v_orig.numero_empleado || ')' else '' end ||
+                 case when v_row.notas <> '' then '. ' || v_row.notas else '' end, 500);
+  insert into public.resguardos (grupo_id, colaborador_id, herramienta, cantidad, occ, id_articulo,
+                                 fecha_prestamo, estado, notas, creado_por, creado_por_id)
+  values (v_grupo, v_dest.id, v_row.herramienta, v_row.cantidad, v_row.occ, v_row.id_articulo,
+          app.hoy(), 'activo', v_nota, v_user, v_uid)
+  returning * into v_new;
+
+  perform app.log('resguardo_transferido', 'resguardo', v_new.id::text,
+    jsonb_build_object('herramienta', v_row.herramienta, 'cantidad', v_row.cantidad,
+                       'resguardo_anterior', v_row.id, 'resguardo_nuevo', v_new.id,
+                       'de_id', v_orig.id, 'de', v_orig.nombre, 'a_id', v_dest.id, 'a', v_dest.nombre));
+  return jsonb_build_object('ok', true, 'anterior', app.resguardo_json(v_row), 'nuevo', app.resguardo_json(v_new));
+end $$;
+
 -- ---------- Alta de colaborador ----------
 drop function if exists public.alta_colaborador(text, text, text);
 create or replace function public.alta_colaborador(p_numero_empleado text, p_nombre text, p_nip text, p_area text default '')
@@ -883,6 +1042,7 @@ grant execute on function app.usuario_activo(), app.es_admin() to authenticated;
 grant execute on function
   public.crear_resguardo(uuid, text, jsonb, date, text, uuid),
   public.devolver_resguardo(uuid, text),
+  public.transferir_resguardo(uuid, uuid, text, text, uuid),
   public.alta_colaborador(text, text, text, text),
   public.baja_colaborador(uuid),
   public.cambiar_nip(uuid, text),

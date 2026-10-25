@@ -191,6 +191,7 @@ Al terminar, cierra PowerShell (la `service_role` key se borra con la ventana).
 
 - **Nuevo resguardo**: escribe el **número de empleado** (o el nombre completo exacto). El colaborador teclea su NIP. Si se equivoca 5 veces, se bloquea 15 minutos. Un supervisor puede desbloquearlo antes en Colaboradores → **NIP** (le asigna uno nuevo).
 - **Devolución**: en Activos, **Marcar devolución → Sí, devolver**. La registra quien tiene la sesión iniciada (almacén, supervisor o admin) y queda a su nombre en la bitácora.
+- **Transferir herramienta de un colaborador a otro**: en Activos, **Transferir** en la tarjeta → escribe el número de empleado (o nombre) de quien la recibe → teclea su NIP **quien entrega** → teclea su NIP **quien recibe**. La base verifica los dos NIP (con el mismo bloqueo por intentos fallidos), cierra el resguardo anterior como "transferido a …" y crea uno nuevo a nombre de quien recibe, con nota "Transferido de …". Queda en la bitácora como `resguardo_transferido`. La puede registrar cualquier cuenta activa (almacén, supervisor o admin).
 - **Quitar sin NIP, baja de colaborador o cambio de NIP**: el supervisor escribe **su correo** y contraseña en la ventana que aparece.
 - **Buscar**: en Activos, Historial, Tabla y Colaboradores puedes buscar por nombre o por número de empleado.
 - **Sin internet**: la app avisa y no guarda nada. Cuando vuelva la conexión, repite la operación. Un resguardo que se repite por un corte de red no se duplica.
@@ -250,7 +251,7 @@ select numero_empleado, nombre, area from public.colaboradores where activo and 
 
 -- Devoluciones de los últimos 30 días: quién, cuándo y qué
 select ts, usuario, detalle->>'rol' as rol, detalle->>'colaborador' as colaborador, detalle->>'herramienta' as herramienta
-  from public.bitacora where accion in ('resguardo_devuelto','resguardo_quitado')
+  from public.bitacora where accion in ('resguardo_devuelto','resguardo_quitado','resguardo_transferido')
    and ts > now() - interval '30 days' order by ts desc;
 
 -- Desbloquear a alguien (también se puede desde la app cambiando su NIP)
