@@ -195,6 +195,21 @@ Al terminar, cierra PowerShell (la `service_role` key se borra con la ventana).
 - **Buscar**: en Activos, Historial, Tabla y Colaboradores puedes buscar por nombre o por número de empleado.
 - **Sin internet**: la app avisa y no guarda nada. Cuando vuelva la conexión, repite la operación. Un resguardo que se repite por un corte de red no se duplica.
 - La sesión se cierra sola tras **30 minutos** sin uso (se cambia en `config.js`) o al cerrar el navegador.
+- **Cambiar mi contraseña**: con la sesión iniciada, botón de la **llave** (junto a "Cerrar sesión", abajo en la barra lateral; en celular, arriba a la derecha). Pide la contraseña actual y la nueva dos veces (mínimo 10 caracteres). Recomienda a cada persona cambiar la contraseña inicial que le diste en su primer ingreso.
+
+### Si alguien olvida su contraseña
+
+La app no tiene "Olvidé mi contraseña": la restablece un administrador. En Supabase → **SQL Editor → New query**, cambia el correo y la contraseña temporal y ejecuta:
+
+```sql
+update auth.users
+   set encrypted_password = extensions.crypt('Temporal-2026-cambiar', extensions.gen_salt('bf'))
+ where email = 'correo@citrojugo.com.mx';
+```
+
+Debe decir *1 row affected*. Entrega la contraseña temporal en privado y pide a la persona que la cambie con el botón de la llave al entrar. (Ese query queda en el historial del SQL Editor: usa siempre una contraseña temporal, nunca la definitiva.)
+
+Para quitarle el acceso a alguien (por ejemplo, si deja la empresa): en la app, **Usuarios → Desactivar**. Su historial se conserva.
 
 ## 7. Actualizaciones periódicas
 
