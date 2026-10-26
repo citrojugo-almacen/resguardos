@@ -10,6 +10,7 @@
   var LOGO = "logo.png";
   var employees = [], resguardos = [], tools = [], users = [];
   var formerEmployees = {};   // colaboradores dados de baja (para mostrar su nombre en el historial)
+  var portalEstado = {};      // colaborador_id → {activado, bloqueado, ultimo} (portal del colaborador)
   var ui = {
     tab: "dashboard",
     query: "", tableQuery: "", catQuery: "", empListQuery: "",
@@ -305,7 +306,9 @@
       selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente", "nombre.asc,id.asc"),
       selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc"),
       selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc"),
-      ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,cargo,activo", "email.asc") : Promise.resolve(null)
+      ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,cargo,activo", "email.asc") : Promise.resolve(null),
+      // Si la base aún no tiene el portal (schema.sql anterior), la app sigue funcionando.
+      rpc("estado_portal_colaboradores", {}).catch(function(){ return null; })
     ]).then(function(res){
       var all = res[0].filter(okId).map(mapEmployee);
       employees = all.filter(function(e){ return e.activo; });
@@ -314,6 +317,10 @@
       tools = res[1].filter(okId).map(mapTool);
       resguardos = res[2].filter(function(r){ return okId(r) && UUID_RE.test(String(r.colaborador_id)); }).map(mapResguardo);
       if(res[3]) users = res[3].filter(okId).map(mapUser);
+      if(Array.isArray(res[4])){
+        portalEstado = {};
+        res[4].forEach(function(x){ if(x && UUID_RE.test(String(x.colaborador_id))) portalEstado[String(x.colaborador_id)] = { activado: !!x.activado, bloqueado: !!x.bloqueado }; });
+      }
       lastLoadAt = Date.now();
       ui.loading = false; ui.loadError = ""; ui.offline = false;
       render();
@@ -777,8 +784,10 @@
         html += '<div class="empCard"><div class="avatar avatarLg '+avatarColorClass(emp.nombre)+'">'+esc(initials(emp.nombre))+'</div>' +
           '<div style="min-width:0;flex:1;"><div class="name">'+esc(emp.nombre)+'</div>' +
             '<div class="area">'+(emp.numero ? '<span class="code">#'+esc(emp.numero)+'</span>' : 'Sin número de empleado')+(emp.area ? ' · '+esc(emp.area) : '')+'</div>' +
-            (emp.nipPendiente ? '<div class="area">NIP pendiente · asígnalo con el botón NIP</div>' : '') + '</div>' +
+            (emp.nipPendiente ? '<div class="area">NIP pendiente · asígnalo con el botón NIP</div>' : '') +
+            portalLine(emp) + '</div>' +
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
+          (portalEstado[emp.id] ? '<button type="button" class="link" data-action="reset-portal" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Restablecer el acceso al portal del colaborador">Portal</button>' : '') +
           (activosEmp>0 ? '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>' : '') +
           '<button class="deleteBtn" data-action="request-delete-employee" data-id="'+emp.id+'" title="Eliminar colaborador" aria-label="Eliminar colaborador">'+icon("trash")+'</button>' +
         '</div>';
@@ -790,6 +799,12 @@
       if(page.hasMore) html += loadMoreBtn("empleados", (page.total-page.shown.length)+' restantes');
     }
     return html;
+  }
+
+  function portalLine(emp){
+    var p = portalEstado[emp.id];
+    if(!p || !p.activado) return '';
+    return '<div class="area">Portal: '+(p.bloqueado ? '<b style="color:var(--danger);">bloqueado por intentos</b>' : 'activo')+'</div>';
   }
 
   function tablaTpl(){
@@ -909,7 +924,8 @@
       "delete-employee-cascade": "Autorizar baja de colaborador",
       "delete-employee": "Autorizar baja de colaborador",
       "cambiar-nip": "Asignar o cambiar NIP",
-      "admin-user": "Confirmar cambio de cuenta"
+      "admin-user": "Confirmar cambio de cuenta",
+      "reset-portal": "Restablecer acceso al portal"
     };
     var subtitles = {
       "devolver-item": "Esta acción cierra el resguardo.",
@@ -917,7 +933,8 @@
       "delete-employee-cascade": "Este colaborador tiene herramienta en resguardo activa; se marcará como devuelta al eliminarlo. Requiere correo y contraseña de un supervisor o administrador.",
       "delete-employee": "Dar de baja a un colaborador requiere correo y contraseña de un supervisor o administrador. Su historial se conserva.",
       "cambiar-nip": "Asigna un NIP nuevo y desbloquea al colaborador si estaba bloqueado por intentos fallidos. Requiere correo y contraseña de un supervisor o administrador.",
-      "admin-user": "Confirma con tu correo y contraseña de administrador."
+      "admin-user": "Confirma con tu correo y contraseña de administrador.",
+      "reset-portal": "Úsalo si el colaborador olvidó su contraseña o quedó bloqueado. Su contraseña vuelve a ser su número de empleado, por una sola vez, y deberá crear una nueva al entrar. Requiere correo y contraseña de un supervisor o administrador."
     };
     return '' +
     '<div class="overlay'+overlayEnter+'"><div class="modal" style="max-width:340px;">' +
@@ -951,6 +968,8 @@
         (ui.loginError ? '<p class="errorText" style="margin:-6px 0 12px;">'+icon("alert")+' '+esc(ui.loginError)+'</p>' : '') +
         '<button type="submit" class="btnPrimary" style="width:100%;margin-top:6px;"'+(ui.loginPending||ui.booting||!configOk()?' disabled':'')+'>'+(ui.booting?'Cargando…':ui.loginPending?'Verificando…':'Iniciar sesión')+'</button>' +
       '</form>' +
+      '<div class="loginHint"><a class="link colabLink" href="colaborador.html">'+icon("nav_empleados")+' Soy Colaborador Citrojugo</a>' +
+        '<p class="hint" style="margin:2px 0 0;">Consulta la herramienta que tienes en resguardo.</p></div>' +
     '</div></div>';
   }
 
@@ -1407,6 +1426,7 @@
     if(f.kind === "delete-employee-cascade" || f.kind === "delete-employee") return rpc("baja_colaborador", { p_colaborador_id: p.employeeId }, token);
     if(f.kind === "cambiar-nip") return rpc("cambiar_nip", { p_colaborador_id: p.employeeId, p_nip: f.pin }, token);
     if(f.kind === "admin-user")  return rpc("admin_actualizar_usuario", { p_id: p.userId, p_rol: p.rol, p_activo: !!p.activo }, token);
+    if(f.kind === "reset-portal") return rpc("restablecer_portal_colaborador", { p_colaborador_id: p.employeeId }, token);
     return Promise.reject(new ApiError("Acción no reconocida."));
   }
 
@@ -1432,6 +1452,9 @@
     } else if(f.kind === "cambiar-nip"){
       var e2 = empName(f.payload.employeeId); if(e2) e2.nipPendiente = false;
       toast("ok","NIP actualizado y desbloqueado.");
+    } else if(f.kind === "reset-portal"){
+      delete portalEstado[f.payload.employeeId];
+      toast("ok","Acceso al portal restablecido. Su contraseña vuelve a ser su número de empleado.");
     } else if(f.kind === "admin-user"){
       if(!okId(result)){ ui.authFlow = null; render(); return; }
       var u = mapUser(result);
@@ -1780,6 +1803,7 @@
         case "close-employee-tools": ui.viewEmployeeToolsId = null; render(); break;
         case "quitar-sin-pin": openAuth("quitar-sin-pin", {resguardoId:id}); break;
         case "cambiar-nip": openAuth("cambiar-nip", {employeeId:id}); break;
+        case "reset-portal": openAuth("reset-portal", {employeeId:id}); break;
         case "auth-cancel": if(ui.authFlow && !ui.authFlow.pending){ ui.authFlow = null; render(); } break;
         case "edit-fecha-start":
           ui.editingFechaId = id;

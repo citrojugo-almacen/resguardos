@@ -270,6 +270,8 @@ update app.ajustes set nip_max_intentos = 5, nip_bloqueo_minutos = 15;
 | `index.html` | Sí | Página y estilos. Incluye la CSP. |
 | `app.js` | Sí | Lógica de la app. Habla con Supabase por HTTPS. |
 | `config.js` | Sí | URL del proyecto y clave **anon** (pública). |
+| `colaborador.html` | Sí | Portal del colaborador ("Soy Colaborador Citrojugo"). |
+| `colaborador.js` | Sí | Lógica del portal. Solo llama a las funciones `colab_*`. |
 | `logo.png` | Sí | Logo. |
 | `supabase/schema.sql` | Sí (no tiene secretos) | Tablas, seguridad y funciones. |
 | `SEGURIDAD.md` | Sí | Este documento. |
@@ -279,3 +281,46 @@ update app.ajustes set nip_max_intentos = 5, nip_bloqueo_minutos = 15;
 | `tools/excel_comun.py` | **No** | Funciones compartidas por los importadores. |
 | `tools/respaldo.py` | **No** | Respaldo completo (usa la service_role). |
 | `tests/` | **No** | Pruebas técnicas locales. |
+
+## 11. Portal del colaborador ("Soy Colaborador Citrojugo")
+
+Cada colaborador puede consultar desde su celular **solo sus** resguardos: lo que tiene hoy, desde cuándo, quién se lo entregó y todo su historial (entregas, devoluciones y transferencias). No puede modificar nada ni ver datos de nadie más.
+
+**Cómo entra**
+
+1. En la pantalla de inicio de la app, abajo, toca **Soy Colaborador Citrojugo** (o abre directamente `colaborador.html`).
+2. **Primera vez**: número de empleado y, como contraseña, **el mismo número**. Eso no muestra ningún dato: solo abre una ventana de 10 minutos para crear su contraseña.
+3. Para crearla escribe su **nombre completo como viene en la relación de colaboradores** (apellidos y nombre(s); no importan mayúsculas, acentos ni comas) y una contraseña de al menos 8 caracteres con una letra y un número.
+4. Desde ese momento el número **ya no sirve** como contraseña.
+5. Para cambiar su contraseña después: botón de la llave → nombre completo + contraseña actual + la nueva.
+
+**Si la olvida o quedó bloqueado**: en la app de almacén → Colaboradores → botón **Portal** junto a su nombre → un supervisor confirma con su correo y contraseña. Su contraseña vuelve a ser su número de empleado (una sola vez) y deberá crear una nueva.
+
+**Cómo está protegido**
+
+| Riesgo | Qué lo detiene |
+|---|---|
+| Ver datos de otro colaborador | Las funciones `colab_*` solo aceptan un token de sesión y devuelven únicamente los resguardos de su dueño. La clave pública no da acceso a ninguna tabla. |
+| Entrar con el número de otro (primer ingreso) | El número solo abre la pantalla para crear contraseña; sin el nombre completo exacto no se ve nada. |
+| Adivinar contraseñas o nombres | 5 fallos → bloqueo de 15 min (se duplica hasta 24 h). Además, 60 fallos por hora desde una misma conexión. Todo queda en la bitácora. |
+| Robo de la sesión | Token aleatorio de 256 bits; la base guarda solo su huella SHA-256. Vence a los 15 min sin uso o a las 8 h. Se guarda en `sessionStorage` (se borra al cerrar el navegador). |
+| Contraseñas | bcrypt en el esquema privado `app`, igual que los NIP. |
+
+**Riesgo que queda**: un compañero que conozca el número **y el nombre completo** de alguien que aún no activó su portal podría activarlo antes que él y ver su lista de herramientas (no puede modificar nada). El dueño lo notaría porque su número ya no funciona; en ese caso, restablece su acceso con el botón **Portal** y revisa la bitácora. Conviene pedir a todos que activen su portal en los primeros días.
+
+**Consultas útiles**
+
+```sql
+-- Actividad del portal (últimos 7 días)
+select ts, usuario, accion, detalle->>'ip' as ip from public.bitacora
+ where accion like 'portal%' and ts > now() - interval '7 days' order by ts desc;
+
+-- Cuántos ya activaron su portal
+select count(*) filter (where password_hash is not null) as activados, count(*) as con_intentos from app.portal_cuenta;
+
+-- Ajustes del portal (intentos, bloqueo, tiempos de sesión)
+select portal_max_intentos, portal_bloqueo_minutos, portal_ip_max_fallos_hora,
+       portal_inactividad_minutos, portal_sesion_max_horas, portal_activacion_minutos from app.ajustes;
+```
+
+**Lista de colaboradores**: se carga con `carga_colaboradores.sql` (generado del Excel oficial; solo ESTATUS A y R). Pégalo en el SQL Editor y ejecútalo. Se puede repetir sin duplicar; actualiza nombre, departamento, puesto y localidad. **No lo subas a GitHub**: contiene nombres del personal.

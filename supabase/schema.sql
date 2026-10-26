@@ -974,9 +974,413 @@ begin
     'colaboradores',   (select coalesce(jsonb_agg(to_jsonb(x) - 'nombre_norm' order by x.nombre), '[]') from public.colaboradores x),
     'colaborador_nip', (select coalesce(jsonb_agg(jsonb_build_object('colaborador_id', x.colaborador_id, 'nip_hash', x.nip_hash,
                           'nip_por_defecto', x.nip_por_defecto, 'nip_importado', x.nip_importado)), '[]') from app.colaborador_nip x),
+    'portal_cuenta',   (select coalesce(jsonb_agg(jsonb_build_object('colaborador_id', x.colaborador_id, 'password_hash', x.password_hash,
+                          'activado_en', x.activado_en)), '[]') from app.portal_cuenta x),
     'herramientas',    (select coalesce(jsonb_agg(to_jsonb(x) - 'nombre_norm' order by x.nombre), '[]') from public.herramientas x),
     'resguardos',      (select coalesce(jsonb_agg(to_jsonb(x) order by x.creado_en), '[]') from public.resguardos x),
     'bitacora',        (select coalesce(jsonb_agg(to_jsonb(x) order by x.id), '[]') from public.bitacora x));
+end $$;
+
+-- =====================================================================
+--  PORTAL DEL COLABORADOR ("Soy Colaborador Citrojugo")
+-- ---------------------------------------------------------------------
+--  Los colaboradores NO tienen cuenta de Supabase Auth. Entran con su
+--  número de empleado y una contraseña propia que vive con hash bcrypt
+--  en el esquema privado "app". El navegador solo puede llamar a las
+--  funciones colab_* (clave anon); ninguna tabla queda expuesta.
+--
+--  Flujo:
+--   1) Primera vez: contraseña = su número de empleado. Eso NO muestra
+--      ningún dato: solo abre una ventana de 10 minutos para crear su
+--      contraseña, y para crearla debe escribir su nombre completo tal
+--      como está en la relación de colaboradores.
+--   2) Al crearla, el número deja de servir como contraseña para siempre.
+--   3) Con su contraseña ve SOLO sus resguardos (activos e historial).
+--   4) Si la olvida, un supervisor le restablece el acceso desde la app
+--      de almacén (vuelve al paso 1).
+--  Límites: bloqueo por cuenta (5 fallos → 15 min, se duplica hasta 24 h)
+--  y por IP (60 fallos/hora). Todo queda en la bitácora.
+-- =====================================================================
+
+alter table public.colaboradores add column if not exists localidad text not null default '';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'colaboradores_localidad_largo') then
+    alter table public.colaboradores add constraint colaboradores_localidad_largo check (char_length(localidad) <= 60);
+  end if;
+end $$;
+
+alter table app.ajustes add column if not exists portal_max_intentos        int not null default 5;
+alter table app.ajustes add column if not exists portal_bloqueo_minutos     int not null default 15;
+alter table app.ajustes add column if not exists portal_bloqueo_max_minutos int not null default 1440;
+alter table app.ajustes add column if not exists portal_ip_max_fallos_hora  int not null default 60;
+alter table app.ajustes add column if not exists portal_inactividad_minutos int not null default 15;
+alter table app.ajustes add column if not exists portal_sesion_max_horas    int not null default 8;
+alter table app.ajustes add column if not exists portal_activacion_minutos  int not null default 10;
+
+-- Cuenta del portal. Sin fila (o password_hash NULL) = aún no la activa.
+create table if not exists app.portal_cuenta (
+  colaborador_id    uuid primary key references public.colaboradores (id) on delete cascade,
+  password_hash     text,
+  activado_en       timestamptz,
+  intentos_fallidos int not null default 0,
+  bloqueos          int not null default 0,
+  bloqueado_hasta   timestamptz,
+  ultimo_acceso     timestamptz,
+  actualizado_en    timestamptz not null default now()
+);
+
+-- Sesiones del portal. Se guarda solo el SHA-256 del token.
+create table if not exists app.portal_sesion (
+  token_hash     bytea primary key,
+  colaborador_id uuid not null references public.colaboradores (id) on delete cascade,
+  etapa          text not null check (etapa in ('activar', 'activa')),
+  creada_en      timestamptz not null default now(),
+  ultimo_uso     timestamptz not null default now(),
+  expira_max     timestamptz not null
+);
+create index if not exists portal_sesion_colab_idx on app.portal_sesion (colaborador_id);
+
+-- Fallos por IP (para frenar barridos de números de empleado).
+create table if not exists app.portal_fallo_ip (
+  id  bigint generated always as identity primary key,
+  ts  timestamptz not null default now(),
+  ip  text not null
+);
+create index if not exists portal_fallo_ip_idx on app.portal_fallo_ip (ip, ts desc);
+
+alter table app.portal_cuenta   enable row level security;
+alter table app.portal_sesion   enable row level security;
+alter table app.portal_fallo_ip enable row level security;
+revoke all on app.portal_cuenta, app.portal_sesion, app.portal_fallo_ip from public, anon, authenticated;
+
+-- ---------- Auxiliares ----------
+
+-- Nombre para comparar: como app.norm, además sin puntos ni comas.
+create or replace function app.norm_nombre(t text)
+returns text language sql immutable parallel safe set search_path = '' as $$
+  select btrim(regexp_replace(regexp_replace(app.norm(t), '[.,;:''"´`-]', ' ', 'g'), '\s+', ' ', 'g'))
+$$;
+
+-- Número tecleado → como se guarda ("12" → "0012").
+create or replace function app.portal_num(t text)
+returns text language sql immutable parallel safe set search_path = '' as $$
+  select case when app.norm_num(t) ~ '^[0-9]{1,3}$' then lpad(app.norm_num(t), 4, '0') else app.norm_num(t) end
+$$;
+
+-- IP del cliente según las cabeceras del proxy de Supabase.
+create or replace function app.portal_ip()
+returns text language plpgsql stable set search_path = '' as $$
+declare h json; v text;
+begin
+  begin h := nullif(current_setting('request.headers', true), '')::json; exception when others then h := null; end;
+  if h is not null then
+    v := nullif(btrim(h ->> 'cf-connecting-ip'), '');
+    if v is null then v := nullif(btrim(split_part(coalesce(h ->> 'x-forwarded-for', ''), ',', 1)), ''); end if;
+    if v is null then v := nullif(btrim(h ->> 'x-real-ip'), ''); end if;
+  end if;
+  return left(coalesce(v, 'sin-ip'), 64);
+end $$;
+
+create or replace function app.portal_log(p_accion text, p_col public.colaboradores, p_detalle jsonb default '{}'::jsonb)
+returns void language sql volatile security definer set search_path = '' as $$
+  insert into public.bitacora (usuario_id, usuario, accion, entidad, entidad_id, detalle)
+  values (null, left('Portal · #' || coalesce(p_col.numero_empleado, '?'), 120), p_accion, 'colaborador', p_col.id::text,
+          coalesce(p_detalle, '{}'::jsonb) || jsonb_build_object('colaborador', p_col.nombre, 'ip', app.portal_ip()));
+$$;
+
+create or replace function app.portal_hash(p_token text)
+returns bytea language sql immutable set search_path = '' as $$
+  select extensions.digest(convert_to(coalesce(p_token, ''), 'UTF8'), 'sha256')
+$$;
+
+-- Crea una sesión y devuelve el token en claro (solo esta vez).
+create or replace function app.portal_nueva_sesion(p_col uuid, p_etapa text)
+returns text language plpgsql volatile security definer set search_path = '' as $$
+declare v_cfg app.ajustes%rowtype; v_tok text := encode(extensions.gen_random_bytes(32), 'hex');
+begin
+  select * into v_cfg from app.ajustes where id = 1;
+  insert into app.portal_sesion (token_hash, colaborador_id, etapa, expira_max)
+  values (app.portal_hash(v_tok), p_col, p_etapa,
+          now() + case when p_etapa = 'activar' then make_interval(mins => v_cfg.portal_activacion_minutos)
+                       else make_interval(hours => v_cfg.portal_sesion_max_horas) end);
+  return v_tok;
+end $$;
+
+-- Valida un token; devuelve el colaborador (activo) o NULL. Renueva la inactividad.
+create or replace function app.portal_sesion_valida(p_token text, p_etapa text)
+returns uuid language plpgsql volatile security definer set search_path = '' as $$
+declare v_cfg app.ajustes%rowtype; v_s app.portal_sesion%rowtype;
+begin
+  if p_token is null or p_token !~ '^[0-9a-f]{64}$' then return null; end if;
+  select * into v_cfg from app.ajustes where id = 1;
+  select * into v_s from app.portal_sesion where token_hash = app.portal_hash(p_token) for update;
+  if not found or v_s.etapa <> p_etapa then return null; end if;
+  if v_s.expira_max < now() or v_s.ultimo_uso < now() - make_interval(mins => v_cfg.portal_inactividad_minutos)
+     or not exists (select 1 from public.colaboradores c where c.id = v_s.colaborador_id and c.activo) then
+    delete from app.portal_sesion where token_hash = v_s.token_hash;
+    return null;
+  end if;
+  update app.portal_sesion set ultimo_uso = now() where token_hash = v_s.token_hash;
+  return v_s.colaborador_id;
+end $$;
+
+-- Registra un fallo de la cuenta y aplica el bloqueo. Devuelve el jsonb de respuesta.
+create or replace function app.portal_fallo(p_col public.colaboradores, p_accion text, p_mensaje text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare v_cfg app.ajustes%rowtype; v_c app.portal_cuenta%rowtype; v_min int;
+begin
+  select * into v_cfg from app.ajustes where id = 1;
+  insert into app.portal_fallo_ip (ip) values (app.portal_ip());
+  insert into app.portal_cuenta (colaborador_id) values (p_col.id) on conflict (colaborador_id) do nothing;
+  select * into v_c from app.portal_cuenta where colaborador_id = p_col.id for update;
+  v_c.intentos_fallidos := v_c.intentos_fallidos + 1;
+  if v_c.intentos_fallidos >= v_cfg.portal_max_intentos then
+    v_c.bloqueos := v_c.bloqueos + 1;
+    v_min := least(v_cfg.portal_bloqueo_minutos * power(2, least(v_c.bloqueos - 1, 10))::int, v_cfg.portal_bloqueo_max_minutos);
+    v_c.bloqueado_hasta := now() + make_interval(mins => v_min);
+    v_c.intentos_fallidos := 0;
+  end if;
+  update app.portal_cuenta set intentos_fallidos = v_c.intentos_fallidos, bloqueos = v_c.bloqueos,
+         bloqueado_hasta = v_c.bloqueado_hasta, actualizado_en = now()
+   where colaborador_id = p_col.id;
+  perform app.portal_log(p_accion, p_col, jsonb_build_object('intentos', v_c.intentos_fallidos));
+  if v_min is not null then
+    delete from app.portal_sesion where colaborador_id = p_col.id;
+    perform app.portal_log('portal_bloqueado', p_col, jsonb_build_object('minutos', v_min, 'bloqueado_hasta', v_c.bloqueado_hasta));
+    return jsonb_build_object('ok', false, 'error', 'bloqueado',
+      'mensaje', 'Por seguridad, tu acceso se bloqueó ' || v_min || ' minutos. Si no recuerdas tus datos, acude al almacén.');
+  end if;
+  return jsonb_build_object('ok', false, 'error', p_accion, 'mensaje', p_mensaje,
+                            'intentos_restantes', v_cfg.portal_max_intentos - v_c.intentos_fallidos);
+end $$;
+
+create or replace function app.portal_bloqueo_msg(p_hasta timestamptz)
+returns jsonb language sql stable security definer set search_path = '' as $$
+  select jsonb_build_object('ok', false, 'error', 'bloqueado',
+    'mensaje', 'Tu acceso está bloqueado por intentos fallidos. Intenta después de las ' ||
+               to_char(p_hasta at time zone (select a.zona_horaria from app.ajustes a where a.id = 1), 'HH24:MI') ||
+               ' o acude al almacén.')
+$$;
+
+-- Reglas de contraseña. Devuelve NULL si es válida o el mensaje de error.
+create or replace function app.portal_password_error(p_pass text, p_num text)
+returns text language plpgsql immutable set search_path = '' as $$
+begin
+  if p_pass is null or char_length(p_pass) < 8 then return 'La contraseña debe tener al menos 8 caracteres.'; end if;
+  if octet_length(p_pass) > 72 then return 'La contraseña es demasiado larga (máximo 72 caracteres).'; end if;
+  if p_pass !~ '[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]' or p_pass !~ '[0-9]' then return 'Usa al menos una letra y un número.'; end if;
+  if app.norm_num(p_pass) = p_num or p_pass ~ '^(.)\1+$' then return 'Elige una contraseña distinta de tu número de empleado.'; end if;
+  if lower(p_pass) in ('citrojugo1', 'citrojugo123', 'password1', 'contrasena1', 'qwerty123', 'abc12345', '12345678a', 'a12345678') then
+    return 'Esa contraseña es muy común; elige otra.';
+  end if;
+  return null;
+end $$;
+
+-- ---------- RPC públicas del portal (clave anon) ----------
+
+-- 1) Iniciar sesión con número de empleado y contraseña.
+create or replace function public.colab_login(p_numero text, p_password text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_cfg app.ajustes%rowtype;
+  v_num text := app.portal_num(p_numero);
+  v_col public.colaboradores%rowtype;
+  v_c   app.portal_cuenta%rowtype;
+  v_ip  text := app.portal_ip();
+  v_generic text := 'Número de empleado o contraseña incorrectos.';
+  v_r   jsonb;
+begin
+  select * into v_cfg from app.ajustes where id = 1;
+  -- Limpieza ligera
+  delete from app.portal_sesion where expira_max < now() or ultimo_uso < now() - interval '1 day';
+  delete from app.portal_fallo_ip where ts < now() - interval '2 days';
+
+  if (select count(*) from app.portal_fallo_ip f where f.ip = v_ip and f.ts > now() - interval '1 hour') >= v_cfg.portal_ip_max_fallos_hora then
+    return jsonb_build_object('ok', false, 'error', 'limite_ip',
+      'mensaje', 'Demasiados intentos desde esta conexión. Espera una hora o acude al almacén.');
+  end if;
+  if v_num is null or p_password is null or p_password = '' or char_length(p_password) > 128 or char_length(v_num) > 30 then
+    return jsonb_build_object('ok', false, 'error', 'datos', 'mensaje', 'Escribe tu número de empleado y tu contraseña.');
+  end if;
+
+  select * into v_col from public.colaboradores where activo and numero_empleado = v_num;
+  if not found then
+    perform extensions.crypt(p_password, extensions.gen_salt('bf', 10)); -- mismo tiempo de respuesta
+    insert into app.portal_fallo_ip (ip) values (v_ip);
+    return jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic);
+  end if;
+
+  select * into v_c from app.portal_cuenta where colaborador_id = v_col.id;
+  if found and v_c.bloqueado_hasta is not null and v_c.bloqueado_hasta > now() then
+    insert into app.portal_fallo_ip (ip) values (v_ip);
+    return app.portal_bloqueo_msg(v_c.bloqueado_hasta);
+  end if;
+
+  if v_c.password_hash is null then
+    -- Primera vez: la contraseña es su número de empleado (solo sirve para crear la suya).
+    if app.portal_num(p_password) is distinct from v_num then
+      v_r := app.portal_fallo(v_col, 'portal_login_fallido', v_generic);
+      return case when v_r ->> 'error' = 'bloqueado' then v_r else jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic) end;
+    end if;
+    update app.portal_cuenta set intentos_fallidos = 0 where colaborador_id = v_col.id;
+    delete from app.portal_sesion where colaborador_id = v_col.id and etapa = 'activar';
+    perform app.portal_log('portal_primer_ingreso', v_col);
+    return jsonb_build_object('ok', true, 'etapa', 'activar', 'numero', v_col.numero_empleado,
+                              'token', app.portal_nueva_sesion(v_col.id, 'activar'),
+                              'minutos', v_cfg.portal_activacion_minutos);
+  end if;
+
+  if extensions.crypt(p_password, v_c.password_hash) is distinct from v_c.password_hash then
+    v_r := app.portal_fallo(v_col, 'portal_login_fallido', v_generic);
+      return case when v_r ->> 'error' = 'bloqueado' then v_r else jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic) end;
+  end if;
+  update app.portal_cuenta set intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
+   where colaborador_id = v_col.id;
+  perform app.portal_log('portal_login', v_col);
+  return jsonb_build_object('ok', true, 'etapa', 'activa', 'token', app.portal_nueva_sesion(v_col.id, 'activa'));
+end $$;
+
+-- 2) Primer ingreso: confirmar nombre completo y crear contraseña (obligatorio).
+create or replace function public.colab_activar(p_token text, p_nombre text, p_password text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id  uuid := app.portal_sesion_valida(p_token, 'activar');
+  v_col public.colaboradores%rowtype;
+  v_c   app.portal_cuenta%rowtype;
+  v_err text;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion',
+      'mensaje', 'El tiempo para crear tu contraseña terminó. Vuelve a entrar con tu número de empleado.');
+  end if;
+  select * into v_col from public.colaboradores where id = v_id;
+  select * into v_c from app.portal_cuenta where colaborador_id = v_id for update;
+  if found and v_c.password_hash is not null then
+    delete from app.portal_sesion where colaborador_id = v_id and etapa = 'activar';
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu contraseña ya fue creada. Inicia sesión con ella.');
+  end if;
+  if found and v_c.bloqueado_hasta is not null and v_c.bloqueado_hasta > now() then
+    delete from app.portal_sesion where colaborador_id = v_id;
+    return app.portal_bloqueo_msg(v_c.bloqueado_hasta);
+  end if;
+  if p_nombre is null or char_length(p_nombre) > 160 or app.norm_nombre(p_nombre) = '' then
+    return jsonb_build_object('ok', false, 'error', 'datos', 'mensaje', 'Escribe tu nombre completo.');
+  end if;
+  -- La contraseña se valida antes que el nombre para no gastar intentos por una contraseña débil.
+  v_err := app.portal_password_error(p_password, v_col.numero_empleado);
+  if v_err is not null then
+    return jsonb_build_object('ok', false, 'error', 'password', 'mensaje', v_err);
+  end if;
+  if app.norm_nombre(p_nombre) is distinct from app.norm_nombre(v_col.nombre) then
+    return app.portal_fallo(v_col, 'portal_nombre_incorrecto',
+      'El nombre no coincide con la relación de colaboradores. Escríbelo completo: apellidos y nombre(s).');
+  end if;
+  insert into app.portal_cuenta (colaborador_id) values (v_id) on conflict (colaborador_id) do nothing;
+  update app.portal_cuenta
+     set password_hash = extensions.crypt(p_password, extensions.gen_salt('bf', 10)), activado_en = now(),
+         intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
+   where colaborador_id = v_id;
+  delete from app.portal_sesion where colaborador_id = v_id;
+  perform app.portal_log('portal_activado', v_col);
+  return jsonb_build_object('ok', true, 'token', app.portal_nueva_sesion(v_id, 'activa'));
+end $$;
+
+-- 3) Mis datos: perfil y SOLO mis resguardos.
+create or replace function public.colab_mis_resguardos(p_token text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id  uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_col public.colaboradores%rowtype;
+  v_c   app.portal_cuenta%rowtype;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+  select * into v_col from public.colaboradores where id = v_id;
+  select * into v_c from app.portal_cuenta where colaborador_id = v_id;
+  update app.portal_cuenta set ultimo_acceso = now() where colaborador_id = v_id;
+  return jsonb_build_object('ok', true,
+    'hoy', app.hoy(),
+    'perfil', jsonb_build_object('nombre', v_col.nombre, 'numero_empleado', v_col.numero_empleado,
+                                 'puesto', v_col.puesto, 'area', v_col.area, 'localidad', v_col.localidad,
+                                 'activado_en', v_c.activado_en, 'ultimo_acceso', v_c.ultimo_acceso),
+    'resguardos', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', r.id, 'herramienta', r.herramienta, 'cantidad', r.cantidad, 'occ', r.occ, 'id_articulo', r.id_articulo,
+        'fecha_prestamo', r.fecha_prestamo, 'fecha_devolucion', r.fecha_devolucion, 'estado', r.estado,
+        'notas', r.notas, 'entrego', r.creado_por, 'recibio', r.devuelto_por, 'creado_en', r.creado_en)
+        order by r.estado, coalesce(r.fecha_devolucion, r.fecha_prestamo) desc, r.creado_en desc)
+      from public.resguardos r where r.colaborador_id = v_id), '[]'::jsonb));
+end $$;
+
+-- 4) Cambiar mi contraseña (actual + nombre completo + nueva).
+create or replace function public.colab_cambiar_password(p_token text, p_nombre text, p_actual text, p_nueva text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id  uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_col public.colaboradores%rowtype;
+  v_c   app.portal_cuenta%rowtype;
+  v_err text;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+  select * into v_col from public.colaboradores where id = v_id;
+  select * into v_c from app.portal_cuenta where colaborador_id = v_id for update;
+  v_err := app.portal_password_error(p_nueva, v_col.numero_empleado);
+  if v_err is not null then return jsonb_build_object('ok', false, 'error', 'password', 'mensaje', v_err); end if;
+  if p_actual is null or char_length(p_actual) > 128 or extensions.crypt(p_actual, v_c.password_hash) is distinct from v_c.password_hash then
+    return app.portal_fallo(v_col, 'portal_password_incorrecta', 'Tu contraseña actual no es correcta.');
+  end if;
+  if app.norm_nombre(coalesce(p_nombre, '')) is distinct from app.norm_nombre(v_col.nombre) then
+    return app.portal_fallo(v_col, 'portal_nombre_incorrecto', 'El nombre no coincide con la relación de colaboradores.');
+  end if;
+  if p_nueva = p_actual then
+    return jsonb_build_object('ok', false, 'error', 'password', 'mensaje', 'La contraseña nueva debe ser distinta de la actual.');
+  end if;
+  update app.portal_cuenta
+     set password_hash = extensions.crypt(p_nueva, extensions.gen_salt('bf', 10)),
+         intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
+   where colaborador_id = v_id;
+  -- Cierra las demás sesiones abiertas (otros celulares)
+  delete from app.portal_sesion where colaborador_id = v_id and token_hash <> app.portal_hash(p_token);
+  perform app.portal_log('portal_password_cambiada', v_col);
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- 5) Cerrar sesión.
+create or replace function public.colab_logout(p_token text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+begin
+  if p_token ~ '^[0-9a-f]{64}$' then
+    delete from app.portal_sesion where token_hash = app.portal_hash(p_token);
+  end if;
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- 6) (App de almacén) Restablecer el acceso al portal: supervisor/admin + contraseña.
+create or replace function public.restablecer_portal_colaborador(p_colaborador_id uuid)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare v_col public.colaboradores%rowtype;
+begin
+  perform app.exigir(array['admin', 'supervisor'], true);
+  select * into v_col from public.colaboradores where id = p_colaborador_id and activo;
+  if not found then raise exception using errcode = '22023', message = 'Colaborador no encontrado.'; end if;
+  delete from app.portal_sesion where colaborador_id = p_colaborador_id;
+  delete from app.portal_cuenta where colaborador_id = p_colaborador_id;
+  perform app.log('portal_restablecido', 'colaborador', p_colaborador_id::text,
+                  jsonb_build_object('colaborador', v_col.nombre, 'numero_empleado', v_col.numero_empleado));
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- 7) (App de almacén) Estado del portal de cada colaborador (sin datos sensibles).
+create or replace function public.estado_portal_colaboradores()
+returns table (colaborador_id uuid, activado boolean, bloqueado boolean, ultimo_acceso timestamptz)
+language plpgsql stable security definer set search_path = '' as $$
+begin
+  perform app.exigir(array['admin', 'supervisor', 'almacen']);
+  return query
+    select c.colaborador_id, c.password_hash is not null, coalesce(c.bloqueado_hasta > now(), false), c.ultimo_acceso
+      from app.portal_cuenta c join public.colaboradores k on k.id = c.colaborador_id and k.activo;
 end $$;
 
 -- =====================================================================
@@ -1051,6 +1455,17 @@ grant execute on function
   public.eliminar_herramienta(uuid),
   public.admin_actualizar_usuario(uuid, text, boolean)
 to authenticated;
+
+-- Portal del colaborador: lo llama la página colaborador.html sin cuenta de
+-- Supabase (clave anon). Cada función valida su propio token.
+grant execute on function
+  public.colab_login(text, text),
+  public.colab_activar(text, text, text),
+  public.colab_mis_resguardos(text),
+  public.colab_cambiar_password(text, text, text, text),
+  public.colab_logout(text)
+to anon, authenticated;
+grant execute on function public.restablecer_portal_colaborador(uuid), public.estado_portal_colaboradores() to authenticated;
 
 -- Importadores y respaldo: solo service_role (nunca en el navegador)
 grant execute on function public.importar_colaboradores(jsonb, boolean), public.importar_herramientas(jsonb, boolean), public.respaldo_completo() to service_role;
