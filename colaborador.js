@@ -261,7 +261,8 @@
           '<div class="fact"><small>Departamento</small><b title="' + esc(sentenceCase(p.area)) + '">' + esc(sentenceCase(p.area) || "—") + '</b></div>' +
           '<div class="fact"><small>Localidad</small><b>' + esc(titleCase(p.localidad) || "—") + '</b></div>' +
         '</div>' +
-        '<div class="badgeLock">' + icon("lock") + 'Datos oficiales de la empresa. Si algo no es correcto, avisa en Recursos Humanos.</div>' +
+        '<div class="badgeLock">' + icon("lock") + '<span>Datos oficiales de la empresa. Si algo no es correcto, avisa en Recursos Humanos.' +
+          (p.activado_en ? ' Creaste tu contraseña el ' + fmt(p.activado_en) + '.' : '') + '</span></div>' +
       '</section></div>';
 
     var summary = '<section class="summary" aria-label="Resumen">' +
@@ -445,7 +446,7 @@
     call("colab_activar", { p_token: st.actToken, p_nombre: nombre, p_password: p1 }).then(function(r){
       st.pending = false;
       if(!r.ok){
-        if(r.error === "sesion" || r.error === "bloqueado"){ cancelActivation(r.mensaje); return; }
+        if(r.error === "sesion" || r.error === "bloqueado" || r.error === "requiere_almacen"){ cancelActivation(r.mensaje); return; }
         st.error = r.mensaje + (r.intentos_restantes != null ? " Te quedan " + r.intentos_restantes + " intento(s)." : "");
         render(); return;
       }
@@ -506,7 +507,7 @@
     call("colab_cambiar_password", { p_token: st.token, p_nombre: nombre, p_actual: actual, p_nueva: n1 }).then(function(r){
       m.pending = false;
       if(!r.ok){
-        if(r.error === "sesion" || r.error === "bloqueado"){ st.pwModal = null; sessionEnded(r.mensaje); return; }
+        if(r.error === "sesion" || r.error === "bloqueado" || r.error === "requiere_almacen"){ st.pwModal = null; sessionEnded(r.mensaje); return; }
         m.error = r.mensaje + (r.intentos_restantes != null ? " Te quedan " + r.intentos_restantes + " intento(s)." : "");
         render(); return;
       }

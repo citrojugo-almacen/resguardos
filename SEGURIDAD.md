@@ -302,11 +302,13 @@ Cada colaborador puede consultar desde su celular **solo sus** resguardos: lo qu
 |---|---|
 | Ver datos de otro colaborador | Las funciones `colab_*` solo aceptan un token de sesión y devuelven únicamente los resguardos de su dueño. La clave pública no da acceso a ninguna tabla. |
 | Entrar con el número de otro (primer ingreso) | El número solo abre la pantalla para crear contraseña; sin el nombre completo exacto no se ve nada. |
-| Adivinar contraseñas o nombres | 5 fallos → bloqueo de 15 min (se duplica hasta 24 h). Además, 60 fallos por hora desde una misma conexión. Todo queda en la bitácora. |
+| Adivinar contraseñas o nombres | 5 fallos → bloqueo de 15 min (se duplica hasta 1 h). **10 nombres incorrectos** → la cuenta queda esperando que el almacén la restablezca (botón **Portal**). Por conexión: 100 fallos y 300 inicios de sesión por hora. Todo queda en la bitácora. |
+| Dejar sin acceso a otro a propósito | El bloqueo dura máximo 1 h y no cierra las sesiones que el dueño ya tiene abiertas. |
+| Llenar la base con peticiones | Máximo 3 sesiones abiertas por colaborador y los ingresos se anotan en la bitácora como máximo una vez cada 30 min. |
 | Robo de la sesión | Token aleatorio de 256 bits; la base guarda solo su huella SHA-256. Vence a los 15 min sin uso o a las 8 h. Se guarda en `sessionStorage` (se borra al cerrar el navegador). |
 | Contraseñas | bcrypt en el esquema privado `app`, igual que los NIP. |
 
-**Riesgo que queda**: un compañero que conozca el número **y el nombre completo** de alguien que aún no activó su portal podría activarlo antes que él y ver su lista de herramientas (no puede modificar nada). El dueño lo notaría porque su número ya no funciona; en ese caso, restablece su acceso con el botón **Portal** y revisa la bitácora. Conviene pedir a todos que activen su portal en los primeros días.
+**Riesgo que queda**: un compañero que conozca el número **y el nombre completo** de alguien que aún no activó su portal podría activarlo antes que él y ver su lista de herramientas (no puede modificar nada). El dueño lo notaría: al intentar con su número, el portal le avisa que "este número ya creó su contraseña", y en su gafete aparece la fecha en que se creó; en ese caso, restablece su acceso con el botón **Portal** y revisa la bitácora. Conviene pedir a todos que activen su portal en los primeros días.
 
 **Consultas útiles**
 

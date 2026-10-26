@@ -998,8 +998,9 @@ end $$;
 --   3) Con su contraseña ve SOLO sus resguardos (activos e historial).
 --   4) Si la olvida, un supervisor le restablece el acceso desde la app
 --      de almacén (vuelve al paso 1).
---  Límites: bloqueo por cuenta (5 fallos → 15 min, se duplica hasta 24 h)
---  y por IP (60 fallos/hora). Todo queda en la bitácora.
+--  Límites: bloqueo por cuenta (5 fallos → 15 min, se duplica hasta 1 h);
+--  10 nombres incorrectos → el almacén debe restablecer; por conexión, 100
+--  fallos y 300 inicios de sesión por hora. Todo queda en la bitácora.
 -- =====================================================================
 
 alter table public.colaboradores add column if not exists localidad text not null default '';
@@ -1011,8 +1012,10 @@ end $$;
 
 alter table app.ajustes add column if not exists portal_max_intentos        int not null default 5;
 alter table app.ajustes add column if not exists portal_bloqueo_minutos     int not null default 15;
-alter table app.ajustes add column if not exists portal_bloqueo_max_minutos int not null default 1440;
-alter table app.ajustes add column if not exists portal_ip_max_fallos_hora  int not null default 60;
+alter table app.ajustes add column if not exists portal_bloqueo_max_minutos int not null default 60;    -- tope corto: evita que alguien deje sin acceso a otro por un día
+alter table app.ajustes add column if not exists portal_ip_max_fallos_hora  int not null default 100;
+alter table app.ajustes add column if not exists portal_ip_max_llamadas_hora int not null default 300;  -- inicios de sesión (buenos o malos) por conexión
+alter table app.ajustes add column if not exists portal_max_fallos_nombre   int not null default 10;   -- nombres incorrectos antes de exigir que el almacén restablezca
 alter table app.ajustes add column if not exists portal_inactividad_minutos int not null default 15;
 alter table app.ajustes add column if not exists portal_sesion_max_horas    int not null default 8;
 alter table app.ajustes add column if not exists portal_activacion_minutos  int not null default 10;
@@ -1039,6 +1042,10 @@ create table if not exists app.portal_sesion (
   expira_max     timestamptz not null
 );
 create index if not exists portal_sesion_colab_idx on app.portal_sesion (colaborador_id);
+create index if not exists portal_sesion_expira_idx on app.portal_sesion (expira_max);
+-- Nombres incorrectos acumulados (solo se reinicia al activar o con el restablecimiento del almacén).
+alter table app.portal_cuenta add column if not exists intentos_nombre  int not null default 0;
+alter table app.portal_cuenta add column if not exists requiere_almacen boolean not null default false;
 
 -- Fallos por IP (para frenar barridos de números de empleado).
 create table if not exists app.portal_fallo_ip (
@@ -1047,6 +1054,9 @@ create table if not exists app.portal_fallo_ip (
   ip  text not null
 );
 create index if not exists portal_fallo_ip_idx on app.portal_fallo_ip (ip, ts desc);
+alter table app.portal_fallo_ip add column if not exists tipo text not null default 'fallo';   -- 'fallo' | 'llamada'
+create index if not exists portal_fallo_ip_tipo_idx on app.portal_fallo_ip (ip, tipo, ts desc);
+create index if not exists bitacora_entidad_accion_idx on public.bitacora (entidad_id, accion, ts desc);
 
 alter table app.portal_cuenta   enable row level security;
 alter table app.portal_sesion   enable row level security;
@@ -1074,8 +1084,10 @@ declare h json; v text;
 begin
   begin h := nullif(current_setting('request.headers', true), '')::json; exception when others then h := null; end;
   if h is not null then
+    -- cf-connecting-ip lo pone Cloudflare (no se puede falsificar). En X-Forwarded-For
+    -- el cliente controla las primeras entradas: se usa la ÚLTIMA (la agrega el proxy).
     v := nullif(btrim(h ->> 'cf-connecting-ip'), '');
-    if v is null then v := nullif(btrim(split_part(coalesce(h ->> 'x-forwarded-for', ''), ',', 1)), ''); end if;
+    if v is null then v := nullif(btrim(regexp_replace(coalesce(h ->> 'x-forwarded-for', ''), '^.*,', '')), ''); end if;
     if v is null then v := nullif(btrim(h ->> 'x-real-ip'), ''); end if;
   end if;
   return left(coalesce(v, 'sin-ip'), 64);
@@ -1087,6 +1099,16 @@ returns void language sql volatile security definer set search_path = '' as $$
   values (null, left('Portal · #' || coalesce(p_col.numero_empleado, '?'), 120), p_accion, 'colaborador', p_col.id::text,
           coalesce(p_detalle, '{}'::jsonb) || jsonb_build_object('colaborador', p_col.nombre, 'ip', app.portal_ip()));
 $$;
+
+-- Eventos rutinarios (ingresos): máximo uno cada 30 min por colaborador, para que nadie llene la bitácora.
+create or replace function app.portal_log_rutina(p_accion text, p_col public.colaboradores)
+returns void language plpgsql volatile security definer set search_path = '' as $$
+begin
+  if not exists (select 1 from public.bitacora b where b.entidad_id = p_col.id::text and b.accion = p_accion
+                  and b.ts > now() - interval '30 minutes') then
+    perform app.portal_log(p_accion, p_col);
+  end if;
+end $$;
 
 create or replace function app.portal_hash(p_token text)
 returns bytea language sql immutable set search_path = '' as $$
@@ -1103,6 +1125,10 @@ begin
   values (app.portal_hash(v_tok), p_col, p_etapa,
           now() + case when p_etapa = 'activar' then make_interval(mins => v_cfg.portal_activacion_minutos)
                        else make_interval(hours => v_cfg.portal_sesion_max_horas) end);
+  -- Máximo 3 sesiones abiertas por colaborador: se cierran las más viejas.
+  delete from app.portal_sesion s where s.colaborador_id = p_col and s.etapa = p_etapa
+     and s.token_hash not in (select x.token_hash from app.portal_sesion x where x.colaborador_id = p_col and x.etapa = p_etapa
+                               order by x.creada_en desc limit 3);
   return v_tok;
 end $$;
 
@@ -1124,8 +1150,11 @@ begin
   return v_s.colaborador_id;
 end $$;
 
+drop function if exists app.portal_fallo(public.colaboradores, text, text);
 -- Registra un fallo de la cuenta y aplica el bloqueo. Devuelve el jsonb de respuesta.
-create or replace function app.portal_fallo(p_col public.colaboradores, p_accion text, p_mensaje text)
+-- p_nombre = true: fue un nombre incorrecto; esos se acumulan aparte y, al llegar
+-- a portal_max_fallos_nombre, la cuenta queda esperando que el almacén la restablezca.
+create or replace function app.portal_fallo(p_col public.colaboradores, p_accion text, p_mensaje text, p_nombre boolean default false)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
 declare v_cfg app.ajustes%rowtype; v_c app.portal_cuenta%rowtype; v_min int;
 begin
@@ -1133,19 +1162,36 @@ begin
   insert into app.portal_fallo_ip (ip) values (app.portal_ip());
   insert into app.portal_cuenta (colaborador_id) values (p_col.id) on conflict (colaborador_id) do nothing;
   select * into v_c from app.portal_cuenta where colaborador_id = p_col.id for update;
+  if v_c.requiere_almacen then
+    return jsonb_build_object('ok', false, 'error', 'requiere_almacen',
+      'mensaje', 'Por seguridad, tu acceso al portal necesita restablecerse. Acude al almacén.');
+  end if;
+  if v_c.bloqueado_hasta is not null and v_c.bloqueado_hasta > now() then
+    return app.portal_bloqueo_msg(v_c.bloqueado_hasta);   -- ya bloqueada (peticiones simultáneas): no suma
+  end if;
   v_c.intentos_fallidos := v_c.intentos_fallidos + 1;
-  if v_c.intentos_fallidos >= v_cfg.portal_max_intentos then
+  if p_nombre then v_c.intentos_nombre := v_c.intentos_nombre + 1; end if;
+  if v_c.intentos_nombre >= v_cfg.portal_max_fallos_nombre then
+    v_c.requiere_almacen := true;
+  elsif v_c.intentos_fallidos >= v_cfg.portal_max_intentos then
     v_c.bloqueos := v_c.bloqueos + 1;
     v_min := least(v_cfg.portal_bloqueo_minutos * power(2, least(v_c.bloqueos - 1, 10))::int, v_cfg.portal_bloqueo_max_minutos);
     v_c.bloqueado_hasta := now() + make_interval(mins => v_min);
     v_c.intentos_fallidos := 0;
   end if;
-  update app.portal_cuenta set intentos_fallidos = v_c.intentos_fallidos, bloqueos = v_c.bloqueos,
-         bloqueado_hasta = v_c.bloqueado_hasta, actualizado_en = now()
+  update app.portal_cuenta set intentos_fallidos = v_c.intentos_fallidos, intentos_nombre = v_c.intentos_nombre,
+         requiere_almacen = v_c.requiere_almacen, bloqueos = v_c.bloqueos, bloqueado_hasta = v_c.bloqueado_hasta, actualizado_en = now()
    where colaborador_id = p_col.id;
-  perform app.portal_log(p_accion, p_col, jsonb_build_object('intentos', v_c.intentos_fallidos));
+  perform app.portal_log(p_accion, p_col, jsonb_build_object('intentos', v_c.intentos_fallidos, 'nombres_fallidos', v_c.intentos_nombre));
+  if v_c.requiere_almacen then
+    delete from app.portal_sesion where colaborador_id = p_col.id and etapa = 'activar';
+    perform app.portal_log('portal_requiere_almacen', p_col, jsonb_build_object('nombres_fallidos', v_c.intentos_nombre));
+    return jsonb_build_object('ok', false, 'error', 'requiere_almacen',
+      'mensaje', 'Demasiados nombres incorrectos. Por seguridad, acude al almacén para que restablezcan tu acceso.');
+  end if;
   if v_min is not null then
-    delete from app.portal_sesion where colaborador_id = p_col.id;
+    -- Solo se cierra la pantalla de "crear contraseña"; las sesiones ya abiertas del dueño siguen.
+    delete from app.portal_sesion where colaborador_id = p_col.id and etapa = 'activar';
     perform app.portal_log('portal_bloqueado', p_col, jsonb_build_object('minutos', v_min, 'bloqueado_hasta', v_c.bloqueado_hasta));
     return jsonb_build_object('ok', false, 'error', 'bloqueado',
       'mensaje', 'Por seguridad, tu acceso se bloqueó ' || v_min || ' minutos. Si no recuerdas tus datos, acude al almacén.');
@@ -1191,14 +1237,18 @@ declare
   v_r   jsonb;
 begin
   select * into v_cfg from app.ajustes where id = 1;
+  -- Una conexión a la vez: los conteos por IP no se pueden saltar con peticiones simultáneas.
+  perform pg_advisory_xact_lock(hashtext('portal_ip:' || v_ip));
   -- Limpieza ligera
   delete from app.portal_sesion where expira_max < now() or ultimo_uso < now() - interval '1 day';
   delete from app.portal_fallo_ip where ts < now() - interval '2 days';
 
-  if (select count(*) from app.portal_fallo_ip f where f.ip = v_ip and f.ts > now() - interval '1 hour') >= v_cfg.portal_ip_max_fallos_hora then
+  if (select count(*) from app.portal_fallo_ip f where f.ip = v_ip and f.tipo = 'fallo' and f.ts > now() - interval '1 hour') >= v_cfg.portal_ip_max_fallos_hora
+     or (select count(*) from app.portal_fallo_ip f where f.ip = v_ip and f.tipo = 'llamada' and f.ts > now() - interval '1 hour') >= v_cfg.portal_ip_max_llamadas_hora then
     return jsonb_build_object('ok', false, 'error', 'limite_ip',
       'mensaje', 'Demasiados intentos desde esta conexión. Espera una hora o acude al almacén.');
   end if;
+  insert into app.portal_fallo_ip (ip, tipo) values (v_ip, 'llamada');
   if v_num is null or p_password is null or p_password = '' or char_length(p_password) > 128 or char_length(v_num) > 30 then
     return jsonb_build_object('ok', false, 'error', 'datos', 'mensaje', 'Escribe tu número de empleado y tu contraseña.');
   end if;
@@ -1210,21 +1260,28 @@ begin
     return jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic);
   end if;
 
-  select * into v_c from app.portal_cuenta where colaborador_id = v_col.id;
-  if found and v_c.bloqueado_hasta is not null and v_c.bloqueado_hasta > now() then
+  -- Fila bloqueada mientras se revisa: sin carreras entre peticiones simultáneas.
+  insert into app.portal_cuenta (colaborador_id) values (v_col.id) on conflict (colaborador_id) do nothing;
+  select * into v_c from app.portal_cuenta where colaborador_id = v_col.id for update;
+  if v_c.requiere_almacen then
+    insert into app.portal_fallo_ip (ip) values (v_ip);
+    return jsonb_build_object('ok', false, 'error', 'requiere_almacen',
+      'mensaje', 'Por seguridad, tu acceso al portal necesita restablecerse. Acude al almacén.');
+  end if;
+  if v_c.bloqueado_hasta is not null and v_c.bloqueado_hasta > now() then
     insert into app.portal_fallo_ip (ip) values (v_ip);
     return app.portal_bloqueo_msg(v_c.bloqueado_hasta);
   end if;
 
   if v_c.password_hash is null then
     -- Primera vez: la contraseña es su número de empleado (solo sirve para crear la suya).
+    -- Los contadores NO se reinician aquí: así no se pueden seguir probando nombres.
     if app.portal_num(p_password) is distinct from v_num then
       v_r := app.portal_fallo(v_col, 'portal_login_fallido', v_generic);
-      return case when v_r ->> 'error' = 'bloqueado' then v_r else jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic) end;
+      return case when v_r ->> 'error' in ('bloqueado', 'requiere_almacen') then v_r else jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic) end;
     end if;
-    update app.portal_cuenta set intentos_fallidos = 0 where colaborador_id = v_col.id;
     delete from app.portal_sesion where colaborador_id = v_col.id and etapa = 'activar';
-    perform app.portal_log('portal_primer_ingreso', v_col);
+    perform app.portal_log_rutina('portal_primer_ingreso', v_col);
     return jsonb_build_object('ok', true, 'etapa', 'activar', 'numero', v_col.numero_empleado,
                               'token', app.portal_nueva_sesion(v_col.id, 'activar'),
                               'minutos', v_cfg.portal_activacion_minutos);
@@ -1232,11 +1289,17 @@ begin
 
   if extensions.crypt(p_password, v_c.password_hash) is distinct from v_c.password_hash then
     v_r := app.portal_fallo(v_col, 'portal_login_fallido', v_generic);
-      return case when v_r ->> 'error' = 'bloqueado' then v_r else jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic) end;
+    if v_r ->> 'error' in ('bloqueado', 'requiere_almacen') then return v_r; end if;
+    if app.portal_num(p_password) = v_num then
+      -- Intentó el número en una cuenta ya activada: se le avisa (el dueño detecta si alguien más la activó).
+      return jsonb_build_object('ok', false, 'error', 'ya_activada',
+        'mensaje', 'Este número ya creó su contraseña. Entra con ella. Si tú no la creaste, acude al almacén para restablecer tu acceso.');
+    end if;
+    return jsonb_build_object('ok', false, 'error', 'credenciales', 'mensaje', v_generic);
   end if;
   update app.portal_cuenta set intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
    where colaborador_id = v_col.id;
-  perform app.portal_log('portal_login', v_col);
+  perform app.portal_log_rutina('portal_login', v_col);
   return jsonb_build_object('ok', true, 'etapa', 'activa', 'token', app.portal_nueva_sesion(v_col.id, 'activa'));
 end $$;
 
@@ -1259,8 +1322,11 @@ begin
     delete from app.portal_sesion where colaborador_id = v_id and etapa = 'activar';
     return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu contraseña ya fue creada. Inicia sesión con ella.');
   end if;
-  if found and v_c.bloqueado_hasta is not null and v_c.bloqueado_hasta > now() then
-    delete from app.portal_sesion where colaborador_id = v_id;
+  if found and (v_c.requiere_almacen or (v_c.bloqueado_hasta is not null and v_c.bloqueado_hasta > now())) then
+    delete from app.portal_sesion where colaborador_id = v_id and etapa = 'activar';
+    if v_c.requiere_almacen then
+      return jsonb_build_object('ok', false, 'error', 'requiere_almacen', 'mensaje', 'Por seguridad, tu acceso al portal necesita restablecerse. Acude al almacén.');
+    end if;
     return app.portal_bloqueo_msg(v_c.bloqueado_hasta);
   end if;
   if p_nombre is null or char_length(p_nombre) > 160 or app.norm_nombre(p_nombre) = '' then
@@ -1273,12 +1339,12 @@ begin
   end if;
   if app.norm_nombre(p_nombre) is distinct from app.norm_nombre(v_col.nombre) then
     return app.portal_fallo(v_col, 'portal_nombre_incorrecto',
-      'El nombre no coincide con la relación de colaboradores. Escríbelo completo: apellidos y nombre(s).');
+      'El nombre no coincide con la relación de colaboradores. Escríbelo completo: apellidos y nombre(s).', true);
   end if;
   insert into app.portal_cuenta (colaborador_id) values (v_id) on conflict (colaborador_id) do nothing;
   update app.portal_cuenta
      set password_hash = extensions.crypt(p_password, extensions.gen_salt('bf', 10)), activado_en = now(),
-         intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
+         intentos_fallidos = 0, intentos_nombre = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
    where colaborador_id = v_id;
   delete from app.portal_sesion where colaborador_id = v_id;
   perform app.portal_log('portal_activado', v_col);
@@ -1332,7 +1398,7 @@ begin
     return app.portal_fallo(v_col, 'portal_password_incorrecta', 'Tu contraseña actual no es correcta.');
   end if;
   if app.norm_nombre(coalesce(p_nombre, '')) is distinct from app.norm_nombre(v_col.nombre) then
-    return app.portal_fallo(v_col, 'portal_nombre_incorrecto', 'El nombre no coincide con la relación de colaboradores.');
+    return app.portal_fallo(v_col, 'portal_nombre_incorrecto', 'El nombre no coincide con la relación de colaboradores.', true);
   end if;
   if p_nueva = p_actual then
     return jsonb_build_object('ok', false, 'error', 'password', 'mensaje', 'La contraseña nueva debe ser distinta de la actual.');
@@ -1379,7 +1445,7 @@ language plpgsql stable security definer set search_path = '' as $$
 begin
   perform app.exigir(array['admin', 'supervisor', 'almacen']);
   return query
-    select c.colaborador_id, c.password_hash is not null, coalesce(c.bloqueado_hasta > now(), false), c.ultimo_acceso
+    select c.colaborador_id, c.password_hash is not null, c.requiere_almacen or coalesce(c.bloqueado_hasta > now(), false), c.ultimo_acceso
       from app.portal_cuenta c join public.colaboradores k on k.id = c.colaborador_id and k.activo;
 end $$;
 
