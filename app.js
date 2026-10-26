@@ -671,6 +671,66 @@
     return html;
   }
 
+  // Quién recibe: aparece en cuanto el número (o el nombre) coincide con un colaborador.
+  function empCandidates(q){
+    var n = norm(q); if(n.length < 2) return [];
+    var u = normNum(q).replace(/^#/, ""), tokens = n.split(" ");
+    var out = employees.filter(function(e){
+      if(u && /^\d+$/.test(u) && e.numero && e.numero.indexOf(u) === 0) return true;
+      var nn = norm(e.nombre);
+      return tokens.every(function(t){ return nn.indexOf(t) >= 0; });
+    });
+    return sortByNombre(out).slice(0, 6);
+  }
+  function empPreviewTpl(){
+    var q = ui.empQuery.trim();
+    if(!q) return '<p class="hint">Escribe el número de empleado; enseguida verás a quién se le asigna la herramienta.</p>';
+    var emp = ui.form.employeeId ? empName(ui.form.employeeId) : resolveEmployeeByQuery(q).emp;
+    if(emp){
+      var act = resguardos.filter(function(r){ return r.employeeId === emp.id && r.estado === "activo"; }).length;
+      return '<div class="empPick" role="status" aria-live="polite">' + avatarTpl(emp, "avatarXl") +
+        '<div class="empPickMain"><small>Se asignará a</small><b>'+esc(emp.nombre)+'</b>' +
+          '<span><span class="code">#'+esc(emp.numero)+'</span>'+(emp.puesto ? ' · '+esc(emp.puesto) : '')+(emp.area ? ' · '+esc(emp.area) : '')+'</span>' +
+          '<div class="empPickTags">' + (act ? '<span class="empTag">'+act+' en resguardo</span>' : '<span class="empTag">Sin herramienta en resguardo</span>') +
+            (emp.nipPendiente ? '<span class="empTag warn">Sin NIP: debe crearlo en su portal o asignárselo un supervisor</span>' : '<span class="empTag ok">NIP activo</span>') +
+          '</div></div>' + icon("check") + '</div>';
+    }
+    var r = resolveEmployeeByQuery(q);
+    if(r.ambiguous) return '<p class="errorText">'+icon("alert")+' Hay varios colaboradores con ese nombre. Escribe su número de empleado.</p>';
+    var c = empCandidates(q);
+    if(!c.length){
+      return '<p class="errorText">'+icon("alert")+' '+(/^#?\d+$/.test(q) ? 'No hay un colaborador activo con el número '+esc(q)+'.' : 'Ningún colaborador coincide con ese nombre.')+'</p>';
+    }
+    return '<p class="hint">¿Es alguno de ellos? Tócalo para elegirlo.</p><div class="empSuggest">' + c.map(function(e){
+      return '<button type="button" class="empSuggestItem" data-action="pick-emp" data-id="'+e.id+'">'+avatarTpl(e, "avatar")+
+        '<span><b>'+esc(e.nombre)+'</b><small><span class="code">#'+esc(e.numero)+'</span>'+(e.puesto ? ' · '+esc(e.puesto) : '')+'</small></span></button>';
+    }).join("") + '</div>';
+  }
+
+  // Sugerencias del catálogo (por nombre o por ID de artículo).
+  function toolCandidates(q, porCodigo){
+    var n = norm(q); if(n.length < 2) return [];
+    var tokens = n.split(" "), out = [];
+    for(var i=0;i<tools.length && out.length<8;i++){
+      var t = tools[i], code = norm(t.idArticulo), name = norm(t.nombre);
+      if(porCodigo ? (code && code.indexOf(n.replace(/\s+/g,"")) >= 0)
+                   : tokens.every(function(k){ return name.indexOf(k) >= 0 || code.indexOf(k) >= 0; })) out.push(t);
+    }
+    return out;
+  }
+  function toolSuggestTpl(field){
+    if(ui.toolSuggestOff || ui.toolSuggestField !== field) return "";
+    var q = field === "codigo" ? ui.form.idArticulo : ui.toolQuery;
+    if(field === "codigo" && ui.form.idArticuloMatched) return "";
+    if(field === "nombre" && tools.some(function(t){ return norm(t.nombre) === norm(q); })) return "";
+    var list = toolCandidates(q, field === "codigo");
+    if(!list.length) return "";
+    return '<div class="suggestions toolSuggest" role="listbox">' + list.map(function(t){
+      return '<button type="button" class="suggestItem" role="option" data-action="pick-tool" data-id="'+t.id+'">' +
+        (t.idArticulo ? '<span class="code toolCode">'+esc(t.idArticulo)+'</span>' : '') + '<span class="toolName">'+esc(t.nombre)+'</span></button>';
+    }).join("") + '</div>';
+  }
+
   function nuevoTpl(){
     if(employees.length===0){
       return '<div class="empty">Primero registra al menos un colaborador.<br/>' +
@@ -694,18 +754,18 @@
     '<form id="form-new-resguardo">' +
       '<p class="sectionTitle">Colaborador</p>' +
       '<div class="formGroup"><div class="field"><label for="input-emp-query">Número de empleado o nombre completo</label>' +
-        '<input type="text" id="input-emp-query" autocomplete="off" placeholder="Ej. 1234 o nombre completo del colaborador" value="'+esc(ui.empQuery)+'"/>' +
-        '<p class="hint">Escribe el número de empleado o el nombre tal como está registrado. Se valida al autorizar el resguardo.</p>' +
+        '<input type="text" id="input-emp-query" autocomplete="off" inputmode="text" placeholder="Ej. 0123 o nombre del colaborador" value="'+esc(ui.empQuery)+'"/>' +
+        empPreviewTpl() +
       '</div></div>' +
       cartHtml +
       '<p class="sectionTitle">Agregar herramienta</p>' +
       '<div class="formGroup">' +
-      '<div class="field"><label for="input-idarticulo">ID de artículo</label><input type="text" id="input-idarticulo" autocomplete="off" placeholder="Opcional — si existe en el catálogo, se vincula solo" value="'+esc(ui.form.idArticulo)+'" style="font-family:var(--mono)"/>' +
+      '<div class="field"><label for="input-idarticulo">ID de artículo</label><div class="suggestWrap"><input type="text" id="input-idarticulo" autocomplete="off" placeholder="Ej. HYE0005 — se vincula solo con el catálogo" value="'+esc(ui.form.idArticulo)+'" style="font-family:var(--mono)"/>' + toolSuggestTpl("codigo") + '</div>' +
         (ui.form.idArticuloHint ? '<p class="hint" style="color:'+(ui.form.idArticuloMatched?'var(--limeDark)':'var(--hint)')+'">'+esc(ui.form.idArticuloHint)+'</p>' : '') +
       '</div>' +
       '<div class="field"><label for="input-tool-query">Herramienta</label>' +
-        '<input type="text" id="input-tool-query" autocomplete="off" placeholder="Escribe el nombre y presiona Enter para agregarla" value="'+esc(ui.toolQuery)+'"/>' +
-        '<p class="hint">Presiona Enter para agregarla a la lista de este resguardo. Si no existe, se agregará como nueva al catálogo.</p>' +
+        '<div class="suggestWrap"><input type="text" id="input-tool-query" autocomplete="off" placeholder="Escribe el nombre o el código y elige de la lista" value="'+esc(ui.toolQuery)+'"/>' + toolSuggestTpl("nombre") + '</div>' +
+        '<p class="hint">Elige de la lista del catálogo y presiona Enter para agregarla. Si no existe, se agregará como nueva.</p>' +
       '</div>' +
       '<div class="row2">' +
         '<div class="field"><label for="input-cantidad">Cantidad</label><input type="number" min="1" id="input-cantidad" value="'+esc(ui.form.cantidad)+'"/></div>' +
@@ -1633,7 +1693,7 @@
       idArticulo: ui.form.idArticulo.trim().slice(0, 60)
     });
     ui.toolQuery = ""; ui.form.herramienta = ""; ui.form.cantidad = 1;
-    ui.form.occ = ""; ui.form.idArticulo = ""; ui.form.idArticuloHint = ""; ui.form.idArticuloMatched = false;
+    ui.form.occ = ""; ui.form.idArticulo = ""; ui.form.idArticuloHint = ""; ui.form.idArticuloMatched = false; ui.toolSuggestOff = true;
     render();
     var toolInput = document.getElementById("input-tool-query");
     if(toolInput) toolInput.focus();
@@ -1645,6 +1705,7 @@
     var n = norm(q);
     if(!n) return { emp: null };
     var u = normNum(q).replace(/^#/, "");
+    if(/^\d{1,3}$/.test(u)) u = ("0000" + u).slice(-4);   // "12" → "0012"
     var byNum = u ? employees.filter(function(e){ return e.numero && e.numero === u; }) : [];
     if(byNum.length === 1) return { emp: byNum[0] };
     var exact = employees.filter(function(e){ return norm(e.nombre) === n; });
@@ -1804,6 +1865,21 @@
         case "close-employee-tools": ui.viewEmployeeToolsId = null; render(); break;
         case "quitar-sin-pin": openAuth("quitar-sin-pin", {resguardoId:id}); break;
         case "cambiar-nip": openAuth("cambiar-nip", {employeeId:id}); break;
+        case "pick-emp": {
+          var pe = empName(id);
+          if(pe){ ui.form.employeeId = pe.id; ui.empQuery = pe.numero || pe.nombre; render(); var ti = document.getElementById("input-idarticulo"); if(ti) ti.focus(); }
+          break;
+        }
+        case "pick-tool": {
+          var pt = tools.filter(function(t){ return t.id === id; })[0];
+          if(pt){
+            ui.toolQuery = pt.nombre; ui.form.herramienta = pt.nombre; ui.form.idArticulo = pt.idArticulo;
+            ui.form.idArticuloHint = pt.idArticulo ? "Vinculado: " + pt.nombre : ""; ui.form.idArticuloMatched = !!pt.idArticulo;
+            ui.toolSuggestOff = true; render();
+            var ci = document.getElementById("input-cantidad"); if(ci){ ci.focus(); try{ ci.select(); }catch(e2){} }
+          }
+          break;
+        }
         case "reset-portal": openAuth("reset-portal", {employeeId:id}); break;
         case "auth-cancel": if(ui.authFlow && !ui.authFlow.pending){ ui.authFlow = null; render(); } break;
         case "edit-fecha-start":
@@ -1848,12 +1924,20 @@
   document.addEventListener("input", function(e){
     var id = e.target.id, v = e.target.value;
     switch(id){
-      case "input-emp-query": ui.empQuery = v; ui.form.employeeId=""; break;
-      case "input-tool-query": ui.toolQuery = v; ui.form.herramienta = v; break;
+      case "input-emp-query": ui.empQuery = v; ui.form.employeeId=""; render(); break;
+      case "input-tool-query": {
+        ui.toolQuery = v; ui.form.herramienta = v; ui.toolSuggestOff = false; ui.toolSuggestField = "nombre";
+        // Si el nombre coincide exacto con el catálogo, se completa su ID de artículo.
+        var exactTool = tools.filter(function(t){ return norm(t.nombre) === norm(v); })[0];
+        if(exactTool && exactTool.idArticulo && !ui.form.idArticulo.trim()){
+          ui.form.idArticulo = exactTool.idArticulo; ui.form.idArticuloHint = "Vinculado: " + exactTool.nombre; ui.form.idArticuloMatched = true;
+        }
+        render(); break;
+      }
       case "input-cantidad": ui.form.cantidad = v; break;
       case "input-occ": ui.form.occ = v; break;
       case "input-idarticulo": {
-        ui.form.idArticulo = v;
+        ui.form.idArticulo = v; ui.toolSuggestOff = false; ui.toolSuggestField = "codigo";
         var foundTool = findToolByIdArticulo(v);
         if(foundTool){
           ui.toolQuery = foundTool.nombre; ui.form.herramienta = foundTool.nombre;
@@ -1923,6 +2007,7 @@
 
   document.addEventListener("keydown", function(e){
     var tid = e.target && e.target.id;
+    if(e.key === "Escape" && (tid === "input-tool-query" || tid === "input-idarticulo") && !ui.toolSuggestOff){ ui.toolSuggestOff = true; render(); return; }
     if(e.key === "Escape"){
       if(ui.pinFlow && !ui.pinFlow.pending){ ui.pinFlow = null; render(); return; }
       if(ui.trFlow && !ui.trFlow.pending && ui.trFlow.step !== "ok"){ ui.trFlow = null; render(); return; }
