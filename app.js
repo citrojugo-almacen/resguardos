@@ -38,8 +38,9 @@
     pinFlow: null,
     toast: null,
     pageSize: 40,
-    visible: { activos: 40, historial: 40, catalogo: 40, empleados: 40, tabla: 40 },
-    justStamped: []
+    visible: { activos: 40, historial: 40, catalogo: 40, empleados: 40, tabla: 40, constancias: 40 },
+    justStamped: [],
+    revFlow: null, audOpen: {}, print: null, cnQuery: "", cnEmpId: ""
   };
 
   function paginate(list, key){
@@ -281,7 +282,10 @@
       fechaPrestamo: isoDate(r.fecha_prestamo), fechaDevolucion: isoDate(r.fecha_devolucion),
       estado: r.estado === "devuelto" ? "devuelto" : "activo", notas: String(r.notas || ""),
       creadoPor: String(r.creado_por || ""), devueltoPor: String(r.devuelto_por || ""),
-      creadoEn: String(r.creado_en || "")
+      creadoEn: String(r.creado_en || ""),
+      condicion: CONDICION[r.condicion] ? r.condicion : "",
+      revisionEn: r.revision_en ? String(r.revision_en) : "", revisionResultado: REVISION[r.revision_resultado] ? r.revision_resultado : "",
+      revisionPor: String(r.revision_por || ""), revisionNota: String(r.revision_nota || "")
     };
   }
   function mapUser(p){
@@ -294,7 +298,8 @@
     resguardos.unshift(r);
   }
 
-  var RES_COLS = "id,grupo_id,colaborador_id,herramienta,cantidad,occ,id_articulo,fecha_prestamo,fecha_devolucion,estado,notas,creado_por,devuelto_por,creado_en";
+  var RES_COLS = "id,grupo_id,colaborador_id,herramienta,cantidad,occ,id_articulo,fecha_prestamo,fecha_devolucion,estado,notas,creado_por,devuelto_por,creado_en,condicion,revision_en,revision_resultado,revision_por,revision_nota";
+  var RES_COLS_BASE = "id,grupo_id,colaborador_id,herramienta,cantidad,occ,id_articulo,fecha_prestamo,fecha_devolucion,estado,notas,creado_por,devuelto_por,creado_en";
   var lastLoadAt = 0;
 
   // Carga completa (paginada de 1000 en 1000). Con ~5 mil resguardos son
@@ -305,10 +310,14 @@
     return Promise.all([
       selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente", "nombre.asc,id.asc"),
       selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc"),
-      selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc"),
+      selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc").catch(function(e){
+        if(e.status === 400) return selectAll("resguardos", RES_COLS_BASE, "creado_en.desc,id.desc");   // base sin actualizar
+        throw e;
+      }),
       ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,cargo,activo", "email.asc") : Promise.resolve(null),
       // Si la base aún no tiene el portal (schema.sql anterior), la app sigue funcionando.
-      rpc("estado_portal_colaboradores", {}).catch(function(){ return null; })
+      rpc("estado_portal_colaboradores", {}).catch(function(){ return null; }),
+      selectAll("constancias", "id,folio,colaborador_id,emitida_en,emitida_por,emitida_por_cargo,resguardos_cerrados,codigo", "folio.desc").catch(function(){ return null; })
     ]).then(function(res){
       var all = res[0].filter(okId).map(mapEmployee);
       employees = all.filter(function(e){ return e.activo; });
@@ -317,6 +326,7 @@
       tools = res[1].filter(okId).map(mapTool);
       resguardos = res[2].filter(function(r){ return okId(r) && UUID_RE.test(String(r.colaborador_id)); }).map(mapResguardo);
       if(res[3]) users = res[3].filter(okId).map(mapUser);
+      if(Array.isArray(res[5])) constancias = res[5].filter(okId).map(mapConstancia);
       if(Array.isArray(res[4])){
         portalEstado = {};
         res[4].forEach(function(x){ if(x && UUID_RE.test(String(x.colaborador_id))) portalEstado[String(x.colaborador_id)] = { activado: !!x.activado, bloqueado: !!x.bloqueado }; });
@@ -437,6 +447,10 @@
       nav_tabla: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="10" y1="10" x2="10" y2="20"/></svg>',
       nav_usuarios: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6l7-3z"/><polyline points="9 12 11 14 15 10"/></svg>',
       chevron: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
+      audit: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v3H9z"/><polyline points="9 13 11 15 15 11"/></svg>',
+      print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
+      nav_auditoria: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v3H9z"/><polyline points="9 13 11 15 15 11"/></svg>',
+      nav_constancias: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/></svg>',
       alert: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
     };
     return icons[name] || "";
@@ -461,6 +475,237 @@
   }
 
   // ---------- Templates ----------
+  // =====================================================================
+  //  Condición de entrega, revisión física, auditoría y constancias
+  // =====================================================================
+  var CONDICION = { nuevo: "Nuevo", usado_bueno: "Usado en buen estado", usado_malo: "Usado en mal estado" };
+  var REVISION = { bien: "En buen estado", danada: "Dañada", no_localizada: "No localizada" };
+  var MESES_LARGOS = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  var LUGAR_EXPEDICION = String(CFG.lugarExpedicion || "Tecomán, Colima");
+  var constancias = [];
+
+  function condChip(c){ return c && CONDICION[c] ? '<span class="cond c-'+c+'">'+CONDICION[c]+'</span>' : ''; }
+  function revisionLine(r){
+    if(!r.revisionResultado) return '';
+    return '<p class="revLine r-'+r.revisionResultado+'">'+icon("audit")+'<span>Revisión '+fmt(String(r.revisionEn).slice(0,10))+': <b>'+REVISION[r.revisionResultado]+'</b>' +
+      (r.revisionNota ? ' · '+esc(r.revisionNota) : '')+(r.revisionPor ? ' <span class="dim">('+esc(r.revisionPor)+')</span>' : '')+'</span></p>';
+  }
+  function fechaLarga(d){ d = d || new Date(); return d.getDate()+' de '+MESES_LARGOS[d.getMonth()]+' de '+d.getFullYear(); }
+  function folioTxt(n){ return "CNA-" + ("000000" + Number(n || 0)).slice(-6); }
+  function mapConstancia(c){
+    return { id: String(c.id), folio: Number(c.folio) || 0, employeeId: String(c.colaborador_id), emitidaEn: String(c.emitida_en || ""),
+             emitidaPor: String(c.emitida_por || ""), emitidaPorCargo: String(c.emitida_por_cargo || ""),
+             cerrados: Number(c.resguardos_cerrados) || 0, codigo: String(c.codigo || "") };
+  }
+  function diasNum(iso){ if(!iso) return 0; return Math.max(0, Math.floor((new Date(todayISO()+"T00:00:00") - new Date(String(iso).slice(0,10)+"T00:00:00"))/86400000)); }
+
+  // ---------- Revisión física (modal) ----------
+  function revisionModalTpl(){
+    var f = ui.revFlow; if(!f) return "";
+    var r = findRes(f.id); if(!r) return "";
+    var emp = empName(r.employeeId);
+    var opts = [["bien","En buen estado","La herramienta está con el colaborador y funciona."],
+                ["danada","Dañada","Está con el colaborador, pero requiere reparación o baja."],
+                ["no_localizada","No localizada","El colaborador no pudo mostrarla."]];
+    return '<div class="overlay'+overlayEnter+'"><div class="modal">' +
+      '<div class="modalHead"><div><div class="modalTitle">Registrar revisión</div><p class="modalSub">'+esc(r.herramienta)+(r.cantidad>1?' ×'+r.cantidad:'')+' · '+(emp?esc(empLabel(emp)):'')+'</p></div>' +
+      '<button type="button" class="closeBtn" data-action="rev-cancel" aria-label="Cerrar">'+icon("x")+'</button></div>' +
+      '<p class="hint" style="margin:-6px 0 12px;">Resultado de la verificación física. Queda en el resguardo y en la bitácora a tu nombre.</p>' +
+      '<div class="revOpts" role="radiogroup">' + opts.map(function(o){
+        return '<button type="button" role="radio" aria-checked="'+(f.resultado===o[0])+'" class="revOpt r-'+o[0]+(f.resultado===o[0]?' on':'')+'" data-action="rev-pick" data-id="'+o[0]+'"><b>'+o[1]+'</b><span>'+o[2]+'</span></button>';
+      }).join("") + '</div>' +
+      '<div class="field" style="margin-top:14px;"><label for="input-rev-nota">Nota'+(f.resultado && f.resultado!=="bien" ? '' : ' (opcional)')+'</label>' +
+        '<textarea id="input-rev-nota" rows="2" maxlength="300" placeholder="'+(f.resultado==="danada"?'Qué daño tiene':f.resultado==="no_localizada"?'Dónde se buscó, qué dijo el colaborador':'Observaciones')+'">'+esc(f.nota)+'</textarea></div>' +
+      (f.error ? '<p class="errorText" style="margin:-6px 0 12px;">'+icon("alert")+' '+esc(f.error)+'</p>' : '') +
+      '<button type="button" class="btnPrimary" data-action="rev-save"'+(f.pending?' disabled':'')+'>'+(f.pending?'Guardando…':'Guardar revisión')+'</button>' +
+    '</div></div>';
+  }
+  function saveRevision(){
+    var f = ui.revFlow; if(!f || f.pending) return;
+    if(!f.resultado){ f.error = "Elige el resultado de la revisión."; render(); return; }
+    if(f.resultado !== "bien" && !f.nota.trim()){ f.error = "Escribe una nota breve: qué daño tiene o dónde se buscó."; render(); return; }
+    f.pending = true; f.error = ""; render();
+    rpc("registrar_revision", { p_resguardo_id: f.id, p_resultado: f.resultado, p_nota: f.nota.trim() }).then(function(row){
+      upsertResguardo(mapResguardo(row));
+      ui.revFlow = null;
+      toast("ok", "Revisión registrada: " + REVISION[row.revision_resultado] + ".");
+    }, function(e){ f.pending = false; f.error = e.message; render(); });
+  }
+
+  // ---------- Auditoría: sugerencias ----------
+  function semanaISO(){ var d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); var w1 = new Date(d.getFullYear(), 0, 4);
+    return d.getFullYear() * 100 + 1 + Math.round(((d - w1) / 86400000 - 3 + (w1.getDay() + 6) % 7) / 7); }
+  function muestraSemanal(list, n){
+    // Selección pseudoaleatoria estable durante la semana (todos ven la misma muestra).
+    var seed = semanaISO();
+    return list.map(function(r){ var h = seed; for(var i=0;i<r.id.length;i++){ h = (h * 31 + r.id.charCodeAt(i)) >>> 0; } return { r: r, h: h }; })
+      .sort(function(a, b){ return a.h - b.h; }).slice(0, n).map(function(x){ return x.r; });
+  }
+  function auditGroups(){
+    var act = getActivos();
+    var sinRev30 = function(r){ return !r.revisionEn || diasNum(r.revisionEn) > 30; };
+    var groups = [];
+    groups.push({ key: "perdidas", prio: "alta", titulo: "Herramienta no localizada",
+      por: "En la última revisión el colaborador no pudo mostrarla. Confirma si se extravió y documenta el reporte.",
+      items: act.filter(function(r){ return r.revisionResultado === "no_localizada"; }) });
+    groups.push({ key: "danadas", prio: "alta", titulo: "Herramienta dañada o entregada en mal estado",
+      por: "Evalúa si se repara, se cambia o se da de baja antes de que falle en operación.",
+      items: act.filter(function(r){ return r.revisionResultado === "danada" || (r.condicion === "usado_malo" && r.revisionResultado !== "bien"); }) });
+    groups.push({ key: "antiguas", prio: "media", titulo: "Más de 180 días sin revisión",
+      por: "Resguardos largos sin verificación física en los últimos 90 días. Pide al colaborador que la presente.",
+      items: act.filter(function(r){ return diasNum(r.fechaPrestamo) > 180 && (!r.revisionEn || diasNum(r.revisionEn) > 90); })
+               .sort(function(a, b){ return (a.fechaPrestamo || "") < (b.fechaPrestamo || "") ? -1 : 1; }) });
+    var porEmp = {};
+    act.forEach(function(r){ (porEmp[r.employeeId] = porEmp[r.employeeId] || []).push(r); });
+    var cargados = Object.keys(porEmp).filter(function(k){ return porEmp[k].length >= 5; });
+    groups.push({ key: "cargados", prio: "media", titulo: "Colaboradores con 5 o más herramientas",
+      por: "Revisa con cada uno si todo sigue en uso; lo que no use puede regresar al almacén.",
+      items: [].concat.apply([], cargados.map(function(k){ return porEmp[k]; })), porPersona: true });
+    groups.push({ key: "sincodigo", prio: "media", titulo: "Herramienta sin código de artículo",
+      por: "Se registró sin ID del catálogo. Vincúlala para poder conciliar con el inventario de AX.",
+      items: act.filter(function(r){ return !r.idArticulo; }) });
+    groups.push({ key: "muestra", prio: "baja", titulo: "Muestra aleatoria de la semana",
+      por: "Conteo cíclico: 10 resguardos elegidos al azar (sin revisión en 30 días). La muestra cambia cada lunes.",
+      items: muestraSemanal(act.filter(sinRev30), 10) });
+    var sinPortal = act.filter(function(r){ return !portalEstado[r.employeeId] || !portalEstado[r.employeeId].activado; });
+    var personas = {}; sinPortal.forEach(function(r){ personas[r.employeeId] = true; });
+    groups.push({ key: "portal", prio: "baja", titulo: "Con herramienta y sin portal activado",
+      por: "Invítalos a entrar a \"Soy Colaborador Citrojugo\": así revisan ellos mismos lo que tienen a su nombre.",
+      items: sinPortal, personas: Object.keys(personas).length });
+    return groups;
+  }
+  function auditoriaTpl(){
+    var act = getActivos();
+    var groups = auditGroups();
+    var revisados30 = act.filter(function(r){ return r.revisionEn && diasNum(r.revisionEn) <= 30; }).length;
+    var pct = act.length ? Math.round(revisados30 * 100 / act.length) : 0;
+    var pend = groups.filter(function(g){ return g.prio === "alta"; }).reduce(function(s, g){ return s + g.items.length; }, 0);
+    var html = '<div class="metricGrid audMetrics">' +
+      '<div class="metric m-lime"><div class="metricLabel">Revisados (30 días)</div><div class="metricValue">'+pct+'%</div><p class="hint" style="margin:4px 0 0;">'+revisados30+' de '+act.length+' activos</p></div>' +
+      '<div class="metric m-amber"><div class="metricLabel">Prioridad alta</div><div class="metricValue">'+pend+'</div><p class="hint" style="margin:4px 0 0;">no localizadas o dañadas</p></div>' +
+      '<div class="metric m-teal"><div class="metricLabel">Entregadas en mal estado</div><div class="metricValue">'+act.filter(function(r){return r.condicion==="usado_malo";}).length+'</div><p class="hint" style="margin:4px 0 0;">aún en resguardo</p></div>' +
+      '<div class="metric m-plum"><div class="metricLabel">Sin código</div><div class="metricValue">'+act.filter(function(r){return !r.idArticulo;}).length+'</div><p class="hint" style="margin:4px 0 0;">fuera del catálogo</p></div>' +
+    '</div>';
+    if(act.length === 0){ return html + '<p class="empty">No hay resguardos activos que revisar.</p>'; }
+    groups.forEach(function(g){
+      var open = !!ui.audOpen[g.key], shown = open ? g.items : g.items.slice(0, 6);
+      html += '<section class="audGroup p-'+g.prio+'"><div class="audHead"><span class="audPrio">'+(g.prio==="alta"?"Prioridad alta":g.prio==="media"?"Prioridad media":"Seguimiento")+'</span>' +
+        '<div class="audTitle"><h2>'+esc(g.titulo)+'</h2><span class="audCount">'+(g.personas!=null ? g.personas+' persona'+(g.personas!==1?'s':'') : g.items.length)+'</span></div>' +
+        '<p class="audWhy">'+esc(g.por)+'</p>' +
+        (g.items.length ? '<button type="button" class="btnGhost audPrint" data-action="aud-print" data-id="'+g.key+'">'+icon("print")+' Imprimir lista de verificación</button>' : '') + '</div>';
+      if(!g.items.length){ html += '<p class="audOk">'+icon("check")+' Nada pendiente aquí.</p></section>'; return; }
+      html += '<div class="audList">' + shown.map(function(r){
+        var emp = empName(r.employeeId);
+        return '<div class="audItem"><div class="audMain"><b>'+esc(r.herramienta)+(r.cantidad>1?' <span class="qty">×'+r.cantidad+'</span>':'')+'</b>' +
+          '<span>'+(emp?esc(emp.nombre)+(emp.numero?' · #'+esc(emp.numero):''):'—')+' · desde '+fmt(r.fechaPrestamo)+' ('+diasNum(r.fechaPrestamo)+' días)'+(r.idArticulo?' · <span class="code">'+esc(r.idArticulo)+'</span>':'')+'</span>' +
+          '<span class="audChips">'+condChip(r.condicion)+(r.revisionResultado?'<span class="cond rv-'+r.revisionResultado+'">'+REVISION[r.revisionResultado]+' · '+fmt(String(r.revisionEn).slice(0,10))+'</span>':'<span class="cond rv-none">Sin revisión</span>')+'</span></div>' +
+          '<button type="button" class="btnOutline audBtn" data-action="rev-open" data-id="'+r.id+'">'+icon("audit")+' Revisar</button></div>';
+      }).join("") + '</div>';
+      if(g.items.length > 6) html += '<button type="button" class="link loadMore" data-action="aud-toggle" data-id="'+g.key+'">'+(open?'Ver menos':'Ver los '+g.items.length)+'</button>';
+      html += '</section>';
+    });
+    return html;
+  }
+
+  // ---------- Constancias ----------
+  function constanciasTpl(){
+    var q = ui.cnQuery.trim();
+    var emp = ui.cnEmpId ? empName(ui.cnEmpId) : (q ? resolveEmployeeByQuery(q).emp : null);
+    var html = '<p class="sectionTitle">Colaborador</p><div class="formGroup"><div class="field">' +
+      '<label for="input-cn-query">Número de empleado o nombre</label>' +
+      '<input type="text" id="input-cn-query" autocomplete="off" placeholder="Ej. 0123" value="'+esc(ui.cnQuery)+'"/>';
+    if(!q){ html += '<p class="hint">Solo se emite si el colaborador no tiene herramienta en resguardo. La firma quien la expide en el almacén.</p>'; }
+    else if(!emp){
+      var c = empCandidates(q);
+      html += c.length ? '<div class="empSuggest">' + c.map(function(e){
+          return '<button type="button" class="empSuggestItem" data-action="cn-pick" data-id="'+e.id+'">'+avatarTpl(e, "avatar")+'<span><b>'+esc(e.nombre)+'</b><small><span class="code">#'+esc(e.numero)+'</span>'+(e.puesto?' · '+esc(e.puesto):'')+'</small></span></button>';
+        }).join("") + '</div>' : '<p class="errorText">'+icon("alert")+' No se encontró a ese colaborador.</p>';
+    } else {
+      var act = resguardos.filter(function(r){ return r.employeeId === emp.id && r.estado === "activo"; });
+      var cerr = resguardos.filter(function(r){ return r.employeeId === emp.id && r.estado !== "activo"; }).length;
+      if(act.length){
+        html += '<div class="cnState no">'+avatarTpl(emp,"avatarXl")+'<div><small>Tiene adeudo con almacén</small><b>'+esc(emp.nombre)+'</b><span>#'+esc(emp.numero)+(emp.puesto?' · '+esc(emp.puesto):'')+'</span>' +
+          '<ul class="cnDebt">'+act.map(function(r){ return '<li>'+esc(r.herramienta)+(r.cantidad>1?' ×'+r.cantidad:'')+' <span class="dim">desde '+fmt(r.fechaPrestamo)+'</span></li>'; }).join("")+'</ul>' +
+          '<p class="hint" style="margin:6px 0 0;">No se puede emitir la constancia hasta que devuelva o transfiera esta herramienta.</p></div></div>';
+      } else {
+        html += '<div class="cnState ok">'+avatarTpl(emp,"avatarXl")+'<div><small>Sin adeudos en almacén</small><b>'+esc(emp.nombre)+'</b><span>#'+esc(emp.numero)+(emp.puesto?' · '+esc(emp.puesto):'')+(emp.area?' · '+esc(emp.area):'')+'</span>' +
+          '<span class="dim">'+(cerr ? cerr+' resguardo'+(cerr!==1?'s':'')+' en su historial, todos cerrados.' : 'No tiene resguardos registrados.')+'</span></div></div>' +
+          '<button type="button" class="btnPrimary" data-action="cn-emit" data-id="'+emp.id+'" style="margin-top:14px;"'+(ui.busy?' disabled':'')+'>'+icon("print")+' '+(ui.busy?'Emitiendo…':'Emitir constancia e imprimir')+'</button>';
+      }
+    }
+    html += '</div></div>';
+    var list = constancias.slice().sort(function(a, b){ return b.folio - a.folio; });
+    html += '<p class="sectionTitle">Constancias emitidas</p>';
+    if(!list.length){ html += '<p class="empty">Aún no se ha emitido ninguna constancia.</p>'; return html; }
+    var page = paginate(list, "constancias");
+    html += '<div class="cardGrid listGroup">' + page.shown.map(function(c){
+      var e = empName(c.employeeId);
+      return '<div class="empCard"><span class="cnFolio code">'+folioTxt(c.folio)+'</span><div style="min-width:0;flex:1;"><div class="name">'+(e?esc(e.nombre):'—')+'</div>' +
+        '<div class="area">'+(e&&e.numero?'#'+esc(e.numero)+' · ':'')+fmt(c.emitidaEn.slice(0,10))+' · '+esc(c.emitidaPor)+'</div></div>' +
+        '<button type="button" class="link" data-action="cn-reprint" data-id="'+c.id+'" style="font-size:13px;">'+icon("print")+' Reimprimir</button></div>';
+    }).join("") + '</div>';
+    if(page.hasMore) html += loadMoreBtn("constancias", (page.total-page.shown.length)+' restantes');
+    return html;
+  }
+  function emitirConstancia(empId){
+    if(ui.busy) return;
+    ui.busy = true; render();
+    rpc("emitir_constancia", { p_colaborador_id: empId }).then(function(c){
+      ui.busy = false;
+      var mc = mapConstancia(c);
+      constancias.push(mc);
+      ui.print = { tipo: "constancia", c: mc, copia: false };
+      toast("ok", "Constancia " + folioTxt(mc.folio) + " emitida.");
+    }, function(e){ ui.busy = false; actionError(e); });
+  }
+
+  // ---------- Hojas imprimibles (tamaño carta) ----------
+  function constanciaSheet(c, copia){
+    var e = empName(c.employeeId) || {};
+    var fecha = new Date(c.emitidaEn || Date.now());
+    return '<article class="sheet">' +
+      '<header class="shHead"><img src="'+LOGO+'" alt=""/><div><b>Citrojugo</b><span>Almacén · Control de herramienta en resguardo</span></div>' +
+        '<dl><dt>Folio</dt><dd>'+folioTxt(c.folio)+'</dd><dt>Fecha</dt><dd>'+fechaLarga(fecha)+'</dd></dl></header>' +
+      (copia ? '<p class="shCopy">Reimpresión del folio emitido el '+fechaLarga(fecha)+'</p>' : '') +
+      '<h1 class="shTitle">Constancia de no adeudo de herramienta</h1>' +
+      '<p class="shTo">A quien corresponda:</p>' +
+      '<p>Por medio de la presente, el Almacén de Citrojugo hace constar que <b>'+esc(e.nombre||"")+'</b>, con número de empleado <b>'+esc(e.numero||"")+'</b>' +
+        (e.puesto ? ', puesto <b>'+esc(e.puesto)+'</b>' : '') + (e.area ? ', del departamento de <b>'+esc(e.area)+'</b>' : '') +
+        ', <b>no tiene herramienta ni equipo en resguardo, ni adeudos pendientes</b> con este almacén a la fecha de expedición.</p>' +
+      '<p>'+(c.cerrados ? 'De acuerdo con el sistema de resguardos, el colaborador tuvo '+c.cerrados+' resguardo'+(c.cerrados!==1?'s':'')+' de herramienta, todos devueltos o cerrados a la fecha.' : 'De acuerdo con el sistema de resguardos, el colaborador no tiene resguardos de herramienta registrados.')+'</p>' +
+      '<p>Se extiende la presente a solicitud del interesado, para los fines que a este convengan, en '+esc(LUGAR_EXPEDICION)+', el '+fechaLarga(fecha)+'.</p>' +
+      '<div class="shSigns"><div><span class="shLine"></span><b>'+esc(c.emitidaPor)+'</b><span>'+esc(c.emitidaPorCargo||"Almacén")+' · Expide</span></div>' +
+        '<div><span class="shLine"></span><b>'+esc(e.nombre||"")+'</b><span>No. de empleado '+esc(e.numero||"")+' · Recibe</span></div></div>' +
+      '<footer class="shFoot">Folio '+folioTxt(c.folio)+' · Código de verificación '+esc(c.codigo)+'. Documento emitido desde el sistema de resguardos de Citrojugo; '+
+        'el almacén puede confirmarlo en la sección Constancias. Válido con la firma de quien expide.</footer>' +
+    '</article>';
+  }
+  function checklistSheet(g){
+    var hoy = new Date();
+    var rows = g.items.slice().sort(function(a, b){ var ea = empName(a.employeeId), eb = empName(b.employeeId); return (ea?ea.nombre:"").localeCompare(eb?eb.nombre:"","es"); });
+    return '<article class="sheet sheetList">' +
+      '<header class="shHead"><img src="'+LOGO+'" alt=""/><div><b>Citrojugo</b><span>Almacén · Revisión física de herramienta</span></div>' +
+        '<dl><dt>Fecha</dt><dd>'+fechaLarga(hoy)+'</dd><dt>Registros</dt><dd>'+rows.length+'</dd></dl></header>' +
+      '<h1 class="shTitle">'+esc(g.titulo)+'</h1><p class="shSub">'+esc(g.por)+'</p>' +
+      '<table class="shTable"><thead><tr><th>#</th><th>Colaborador</th><th>Herramienta</th><th>Código</th><th>Entrega</th><th>Bien</th><th>Dañada</th><th>No loc.</th><th>Observaciones</th></tr></thead><tbody>' +
+      rows.map(function(r, i){ var e = empName(r.employeeId);
+        return '<tr><td>'+(i+1)+'</td><td>'+(e?esc(e.nombre)+'<br/><small>#'+esc(e.numero)+'</small>':'—')+'</td><td>'+esc(r.herramienta)+(r.cantidad>1?' ×'+r.cantidad:'')+(r.condicion?'<br/><small>'+CONDICION[r.condicion]+'</small>':'')+'</td>' +
+          '<td>'+esc(r.idArticulo||"—")+'</td><td>'+fmtShort(r.fechaPrestamo)+'</td><td class="box"></td><td class="box"></td><td class="box"></td><td></td></tr>'; }).join("") +
+      '</tbody></table>' +
+      '<div class="shSigns"><div><span class="shLine"></span><b>Revisó</b><span>Nombre y firma</span></div><div><span class="shLine"></span><b>Vo. Bo.</b><span>Supervisor de almacén</span></div></div>' +
+      '<footer class="shFoot">Registra cada resultado en la sección Auditoría (botón Revisar) para que quede en el sistema.</footer>' +
+    '</article>';
+  }
+  function printTpl(){
+    var p = ui.print; if(!p) return "";
+    var sheet = p.tipo === "constancia" ? constanciaSheet(p.c, p.copia) : checklistSheet(p.grupo);
+    return '<div class="printOverlay" role="dialog" aria-modal="true" aria-label="Vista de impresión">' +
+      '<div class="printBar"><b>'+(p.tipo === "constancia" ? 'Constancia '+folioTxt(p.c.folio) : 'Lista de verificación')+'</b><span>Tamaño carta</span>' +
+        '<button type="button" class="btnPrimary" data-action="print-now">'+icon("print")+' Imprimir</button>' +
+        '<button type="button" class="closeBtn" data-action="print-close" aria-label="Cerrar">'+icon("x")+'</button></div>' +
+      '<div class="printStage">'+sheet+'</div></div>';
+  }
+
   function sidebarTpl(){
     var activos = getActivos().length;
     var tabs = [
@@ -470,7 +715,9 @@
       {id:"catalogo", label:"Catálogo", badge:tools.length},
       {id:"empleados", label:"Colaboradores", badge:employees.length},
       {id:"historial", label:"Historial"},
-      {id:"tabla", label:"Tabla completa"}
+      {id:"tabla", label:"Tabla completa"},
+      {id:"auditoria", label:"Auditoría", badge: auditGroups().filter(function(g){ return g.prio === "alta"; }).reduce(function(s, g){ return s + g.items.length; }, 0)},
+      {id:"constancias", label:"Constancias", badge: constancias.length}
     ];
     if(ui.currentUser && ui.currentUser.rol === "admin"){
       tabs.push({id:"usuarios", label:"Usuarios", badge:users.length});
@@ -488,7 +735,7 @@
     '<div class="navList"><div class="navGlider" aria-hidden="true"></div>' + tabs.map(function(t, i){
       var active = ui.tab===t.id ? " active" : "";
       var badge = t.badge ? '<span class="badge">'+t.badge.toLocaleString("es-MX")+'</span>' : "";
-      var section = i===3 ? '<div class="navSection">Registros</div>' : (t.id==="usuarios" ? '<div class="navSection">Administración</div>' : "");
+      var section = i===3 ? '<div class="navSection">Registros</div>' : t.id==="auditoria" ? '<div class="navSection">Control</div>' : (t.id==="usuarios" ? '<div class="navSection">Administración</div>' : "");
       return section + '<button class="navBtn'+active+'"'+(active?' aria-current="page"':'')+' data-action="set-tab" data-tab="'+t.id+'">' +
         '<span class="navIco" aria-hidden="true">'+icon("nav_"+t.id)+'</span><span class="navLabel">'+esc(t.label)+'</span>'+badge+'</button>';
     }).join("") + '</div>' +
@@ -609,7 +856,7 @@
     return '' +
     '<div class="resCard '+r.estado+(renderStamp[r.id]?' stamped':'')+'">' +
       '<div class="resTop">' +
-        '<div style="min-width:0;"><div class="resTitle">'+esc(r.herramienta)+(r.cantidad>1?'<span class="qty">×'+r.cantidad+'</span>':'')+'</div></div>' +
+        '<div style="min-width:0;"><div class="resTitle">'+esc(r.herramienta)+(r.cantidad>1?'<span class="qty">×'+r.cantidad+'</span>':'')+'</div>'+(r.condicion?'<div style="margin-top:6px;">'+condChip(r.condicion)+'</div>':'')+'</div>' +
         '<span class="pill '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+
           (renderStamp[r.id] ? '<span class="burst" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>' : '')+'</span>' +
       '</div>' +
@@ -628,7 +875,9 @@
         : '<div>Devuelto<b>'+fmt(r.fechaDevolucion)+'</b></div>')+'</div>' +
       tagsHtml +
       (r.notas ? '<p class="notas">“'+esc(r.notas)+'”</p>' : '') +
+      revisionLine(r) +
       (r.creadoPor ? '<p class="meta">Autorizó: '+esc(r.creadoPor)+(r.devueltoPor?' · Devolvió: '+esc(r.devueltoPor):'')+'</p>' : '') +
+      (r.estado==="activo" ? '<button type="button" class="link revLink" data-action="rev-open" data-id="'+r.id+'">'+icon("audit")+' Registrar revisión</button>' : '') +
       (r.estado==="activo" ? (ui.confirmReturnId===r.id ?
         '<div class="confirmBox" style="margin:auto 0 0;"><p>¿Registrar la devolución de <b>'+esc(r.herramienta)+'</b>? Quedará a tu nombre en la bitácora.</p>' +
           '<div class="confirmActions"><button class="confirmYes" data-action="devolver-confirm" data-id="'+r.id+'"'+(ui.busy?' disabled':'')+'>'+(ui.busy?'Guardando…':'Sí, devolver')+'</button>' +
@@ -744,7 +993,7 @@
           var sub = [];
           if(c.idArticulo) sub.push('ID '+esc(c.idArticulo));
           if(c.occ) sub.push('OCC '+esc(c.occ));
-          return '<div class="toolRow"><span style="min-width:0;"><b style="font-weight:600;">'+esc(c.herramienta)+'</b> <span class="qty">×'+c.cantidad+'</span>' +
+          return '<div class="toolRow"><span style="min-width:0;"><b style="font-weight:600;">'+esc(c.herramienta)+'</b> <span class="qty">×'+c.cantidad+'</span> '+condChip(c.condicion) +
             (sub.length ? '<span class="sub code">'+sub.join(' · ')+'</span>' : '') +
             '</span><button type="button" class="deleteBtn" data-action="cart-remove" data-id="'+c.tempId+'" title="Quitar de la lista" aria-label="Quitar de la lista">'+icon("trash")+'</button></div>';
         }).join("") +
@@ -771,6 +1020,11 @@
         '<div class="field"><label for="input-cantidad">Cantidad</label><input type="number" min="1" id="input-cantidad" value="'+esc(ui.form.cantidad)+'"/></div>' +
         '<div class="field"><label for="input-occ">OCC (orden de compra)</label><input type="text" id="input-occ" placeholder="Opcional" value="'+esc(ui.form.occ)+'" style="font-family:var(--mono)"/></div>' +
       '</div>' +
+      '<div class="field"><label id="lbl-condicion">Condición en que se entrega</label>' +
+        '<div class="condPick" role="radiogroup" aria-labelledby="lbl-condicion">' + ["nuevo","usado_bueno","usado_malo"].map(function(k){
+          return '<button type="button" role="radio" aria-checked="'+(ui.form.condicion===k)+'" class="condOpt c-'+k+(ui.form.condicion===k?' on':'')+'" data-action="set-cond" data-id="'+k+'"><i></i>'+CONDICION[k]+'</button>';
+        }).join("") + '</div>' +
+        (ui.form.condError ? '<p class="errorText">'+icon("alert")+' Elige la condición de la herramienta.</p>' : '<p class="hint">Obligatorio. Queda en el resguardo y lo ve el colaborador en su portal.</p>') + '</div>' +
       '<button type="button" class="btnGhost" data-action="cart-add" style="margin-bottom:18px;">'+icon("plus")+' Agregar herramienta a la lista</button>' +
       '</div>' +
       '<p class="sectionTitle">Entrega</p>' +
@@ -848,7 +1102,8 @@
             portalLine(emp) + '</div>' +
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
           (portalEstado[emp.id] ? '<button type="button" class="link" data-action="reset-portal" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Restablecer el acceso al portal del colaborador">Portal</button>' : '') +
-          (activosEmp>0 ? '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>' : '') +
+          (activosEmp>0 ? '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>'
+                        : '<button type="button" class="link" data-action="cn-goto" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Constancia de no adeudo">Constancia</button>') +
           '<button class="deleteBtn" data-action="request-delete-employee" data-id="'+emp.id+'" title="Eliminar colaborador" aria-label="Eliminar colaborador">'+icon("trash")+'</button>' +
         '</div>';
       }
@@ -883,7 +1138,7 @@
       html += '<p class="empty">Sin registros.</p>';
     } else {
       html += '<div class="tableScroll"><table><thead><tr>' +
-        ["Entrega","Colaborador","Herramienta","Cant.","OCC","ID art.","Estado","Devuelto","Autorizó","Notas"].map(function(h){return '<th'+(h==="Cant."?' style="text-align:right;"':'')+'>'+h+'</th>';}).join("") +
+        ["Entrega","Colaborador","Herramienta","Cant.","Condición","OCC","ID art.","Estado","Devuelto","Autorizó","Notas"].map(function(h){return '<th'+(h==="Cant."?' style="text-align:right;"':'')+'>'+h+'</th>';}).join("") +
         '</tr></thead><tbody>';
       page.shown.forEach(function(r){
         var emp = empName(r.employeeId);
@@ -892,6 +1147,7 @@
           '<td class="clip" title="'+(emp?esc(empLabel(emp)):"")+'">'+(emp?esc(emp.nombre):"—")+(emp && emp.numero ? ' <span class="code dim">#'+esc(emp.numero)+'</span>' : '')+'</td>' +
           '<td class="clip" title="'+esc(r.herramienta)+'">'+esc(r.herramienta)+'</td>' +
           '<td style="text-align:right;">'+r.cantidad+'</td>' +
+          '<td>'+(r.condicion?CONDICION[r.condicion]:'<span class="dim">—</span>')+'</td>' +
           '<td class="code">'+(r.occ?esc(r.occ):"—")+'</td>' +
           '<td class="code">'+(r.idArticulo?esc(r.idArticulo):"—")+'</td>' +
           '<td><span class="estado '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+'</span></td>' +
@@ -961,7 +1217,7 @@
     var items = resguardos.filter(function(r){ return r.employeeId===emp.id && r.estado==="activo"; });
     var rows = items.length===0 ? '<p class="empty">Este colaborador no tiene herramienta en resguardo.</p>' :
       items.map(function(r){
-        return '<div class="toolRow"><span style="min-width:0;">'+esc(r.herramienta)+(r.cantidad>1?' <span class="qty">×'+r.cantidad+'</span>':'')+
+        return '<div class="toolRow"><span style="min-width:0;">'+esc(r.herramienta)+(r.cantidad>1?' <span class="qty">×'+r.cantidad+'</span>':'')+' '+condChip(r.condicion)+
           '<span class="sub">Entregado '+fmt(r.fechaPrestamo)+'</span></span>' +
           '<button class="deleteBtn" data-action="quitar-sin-pin" data-id="'+r.id+'" title="Quitar del resguardo (requiere autorización)" aria-label="Quitar del resguardo">'+icon("trash")+'</button></div>';
       }).join("");
@@ -1195,6 +1451,8 @@
     if(ui.showNewEmployeeModal) return "emp";
     if(ui.showNewUserModal) return "user";
     if(ui.viewEmployeeToolsId) return "tools:"+ui.viewEmployeeToolsId;
+    if(ui.revFlow) return "rev:"+ui.revFlow.id;
+    if(ui.print) return "print";
     return "";
   }
   var pageTitles = {
@@ -1205,7 +1463,9 @@
     empleados: ["Colaboradores", "Personal que puede recibir herramienta en resguardo"],
     historial: ["Historial", "Resguardos cerrados con su fecha de devolución"],
     tabla: ["Tabla completa", "Todos los movimientos, del más reciente al más antiguo"],
-    usuarios: ["Usuarios", "Cuentas que pueden autorizar devoluciones y ajustes"]
+    usuarios: ["Usuarios", "Cuentas que pueden autorizar devoluciones y ajustes"],
+    auditoria: ["Auditoría", "Sugerencias de revisión física, ordenadas por prioridad"],
+    constancias: ["Constancias", "Constancia de no adeudo de herramienta, tamaño carta, emitida por el almacén"]
   };
   function pageHeadTpl(){
     var p = pageTitles[ui.tab]; if(!p) return "";
@@ -1253,7 +1513,7 @@
   var tabRenderers = {
     dashboard: dashboardTpl, activos: activosTpl, nuevo: nuevoTpl,
     catalogo: catalogoTpl, empleados: empleadosTpl, historial: historialTpl, tabla: tablaTpl,
-    usuarios: usersTpl
+    usuarios: usersTpl, auditoria: auditoriaTpl, constancias: constanciasTpl
   };
 
   function render(){
@@ -1277,7 +1537,7 @@
       }
       return;
     }
-    var narrow = (ui.tab === "nuevo") ? " narrow" : "";
+    var narrow = (ui.tab === "nuevo" || ui.tab === "constancias") ? " narrow" : "";
     var tabEnter = (ui.tab !== lastTab) ? " enter" : "";
     var mk = modalKey();
     overlayEnter = (mk && mk !== lastModalKey) ? " enter" : "";
@@ -1307,7 +1567,7 @@
     var html = '<div class="shell'+(ui.sidebarCollapsed?' collapsed':'')+'"><nav class="sidebar" aria-label="Secciones">' + sidebarTpl() + '</nav>' +
       '<button type="button" class="railLogo" data-action="toggle-sidebar" title="Mostrar barra lateral" aria-label="Mostrar barra lateral"><img src="'+LOGO+'" alt="Citrojugo"/></button>' +
       '<main class="main"><div class="content'+narrow+tabEnter+'">' + pageHeadTpl() + body + '</div></main>' +
-    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + toastTpl();
+    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + revisionModalTpl() + printTpl() + toastTpl();
     document.getElementById("app").innerHTML = html;
     if(tabEnter && lastTab !== null) window.scrollTo(0,0);
     lastTab = ui.tab; lastModalKey = mk; lastPinLen = ui.pinFlow ? ui.pinFlow.pin.length : 0;
@@ -1685,13 +1945,16 @@
     var cant = Math.floor(Number(ui.form.cantidad)) || 1;
     if(cant < 1 || cant > 9999){ toast("err","La cantidad debe estar entre 1 y 9999."); return; }
     if(ui.cart.length >= 50){ toast("err","Máximo 50 herramientas por resguardo."); return; }
+    if(!CONDICION[ui.form.condicion]){ ui.form.condError = true; render(); toast("err","Elige la condición: Nuevo, Usado en buen estado o Usado en mal estado."); return; }
     ui.cart.push({
       tempId: uid(),
       herramienta: nombre,
       cantidad: cant,
       occ: ui.form.occ.trim().slice(0, 60),
-      idArticulo: ui.form.idArticulo.trim().slice(0, 60)
+      idArticulo: ui.form.idArticulo.trim().slice(0, 60),
+      condicion: ui.form.condicion
     });
+    ui.form.condicion = ""; ui.form.condError = false;
     ui.toolQuery = ""; ui.form.herramienta = ""; ui.form.cantidad = 1;
     ui.form.occ = ""; ui.form.idArticulo = ""; ui.form.idArticuloHint = ""; ui.form.idArticuloMatched = false; ui.toolSuggestOff = true;
     render();
@@ -1757,7 +2020,7 @@
     var pin = flow.pin;
     flow.pending = true;
     render();
-    var items = ui.cart.map(function(c){ return { herramienta: c.herramienta, cantidad: c.cantidad, occ: c.occ, id_articulo: c.idArticulo }; });
+    var items = ui.cart.map(function(c){ return { herramienta: c.herramienta, cantidad: c.cantidad, occ: c.occ, id_articulo: c.idArticulo, condicion: c.condicion }; });
     rpc("crear_resguardo", {
       p_colaborador_id: flow.employeeId, p_nip: pin, p_items: items,
       p_fecha: ui.form.fechaPrestamo || todayISO(), p_notas: ui.form.notas.trim(), p_solicitud: flow.requestId
@@ -1881,6 +2144,19 @@
           break;
         }
         case "reset-portal": openAuth("reset-portal", {employeeId:id}); break;
+        case "set-cond": ui.form.condicion = id; ui.form.condError = false; render(); break;
+        case "rev-open": ui.revFlow = { id: id, resultado: "", nota: "", pending: false, error: "" }; render(); break;
+        case "rev-cancel": if(!(ui.revFlow && ui.revFlow.pending)){ ui.revFlow = null; render(); } break;
+        case "rev-pick": if(ui.revFlow){ ui.revFlow.resultado = id; ui.revFlow.error = ""; render(); } break;
+        case "rev-save": saveRevision(); break;
+        case "aud-toggle": ui.audOpen[id] = !ui.audOpen[id]; render(); break;
+        case "aud-print": { var gg = auditGroups().filter(function(g){ return g.key === id; })[0]; if(gg){ ui.print = { tipo: "checklist", grupo: gg }; render(); } break; }
+        case "cn-pick": ui.cnEmpId = id; var cpe = empName(id); if(cpe) ui.cnQuery = cpe.numero || cpe.nombre; render(); break;
+        case "cn-goto": ui.cnEmpId = id; var cge = empName(id); ui.cnQuery = cge ? (cge.numero || cge.nombre) : ""; setTab("constancias"); break;
+        case "cn-emit": emitirConstancia(id); break;
+        case "cn-reprint": { var rc = constancias.filter(function(c){ return c.id === id; })[0]; if(rc){ ui.print = { tipo: "constancia", c: rc, copia: true }; render(); } break; }
+        case "print-now": try{ window.print(); }catch(e3){} break;
+        case "print-close": ui.print = null; render(); break;
         case "auth-cancel": if(ui.authFlow && !ui.authFlow.pending){ ui.authFlow = null; render(); } break;
         case "edit-fecha-start":
           ui.editingFechaId = id;
@@ -1925,6 +2201,8 @@
     var id = e.target.id, v = e.target.value;
     switch(id){
       case "input-emp-query": ui.empQuery = v; ui.form.employeeId=""; render(); break;
+      case "input-cn-query": ui.cnQuery = v; ui.cnEmpId = ""; render(); break;
+      case "input-rev-nota": if(ui.revFlow){ ui.revFlow.nota = v; } break;
       case "input-tool-query": {
         ui.toolQuery = v; ui.form.herramienta = v; ui.toolSuggestOff = false; ui.toolSuggestField = "nombre";
         // Si el nombre coincide exacto con el catálogo, se completa su ID de artículo.
@@ -2008,6 +2286,8 @@
   document.addEventListener("keydown", function(e){
     var tid = e.target && e.target.id;
     if(e.key === "Escape" && (tid === "input-tool-query" || tid === "input-idarticulo") && !ui.toolSuggestOff){ ui.toolSuggestOff = true; render(); return; }
+    if(e.key === "Escape" && ui.print){ ui.print = null; render(); return; }
+    if(e.key === "Escape" && ui.revFlow && !ui.revFlow.pending){ ui.revFlow = null; render(); return; }
     if(e.key === "Escape"){
       if(ui.pinFlow && !ui.pinFlow.pending){ ui.pinFlow = null; render(); return; }
       if(ui.trFlow && !ui.trFlow.pending && ui.trFlow.step !== "ok"){ ui.trFlow = null; render(); return; }

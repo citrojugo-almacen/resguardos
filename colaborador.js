@@ -167,7 +167,8 @@
       out.push({
         fecha: isoDate(r.fecha_prestamo) || isoDate(r.creado_en), ord: String(r.creado_en || ""), tipo: mDe ? "move" : "out",
         titulo: mDe ? 'Te transfirieron <b>' + esc(r.herramienta) + '</b>' + qty(r) : 'Recibiste <b>' + esc(r.herramienta) + '</b>' + qty(r),
-        sub: mDe ? 'De ' + esc(titleCase(mDe[1])) + (r.entrego ? '. Registró ' + esc(r.entrego) : '') : (r.entrego ? 'Te lo entregó ' + esc(r.entrego) : 'Entrega en almacén')
+        sub: (mDe ? 'De ' + esc(titleCase(mDe[1])) + (r.entrego ? '. Registró ' + esc(r.entrego) : '') : (r.entrego ? 'Te lo entregó ' + esc(r.entrego) : 'Entrega en almacén')) +
+             (COND[r.condicion] ? ' · ' + COND[r.condicion] : '')
       });
       if(r.estado !== "activo"){
         var quien = String(r.recibio || "");
@@ -183,6 +184,7 @@
     out.sort(function(a, b){ return a.fecha === b.fecha ? (a.ord < b.ord ? 1 : -1) : (a.fecha < b.fecha ? 1 : -1); });
     return out;
   }
+  var COND = { nuevo: "Nuevo", usado_bueno: "Usado en buen estado", usado_malo: "Usado en mal estado" };
   function qty(r){ return r.cantidad > 1 ? ' <span class="qty">×' + Number(r.cantidad) + '</span>' : ''; }
 
   // ---------- Plantillas ----------
@@ -340,7 +342,7 @@
             return '<article class="item' + (viejo ? ' old' : '') + '" style="--i:' + i + '"><div class="itemTop"><span class="itemIco">' + icon("wrench") + '</span>' +
               '<div class="itemMain"><div class="itemName">' + esc(r.herramienta) + qty(r) + '</div><div class="itemWhen">Desde el ' + fmt(r.fecha_prestamo) + '</div></div>' +
               '<span class="days" title="Tiempo en tu resguardo">' + daysLabel(dias) + '</span></div>' +
-              (r.id_articulo || r.occ ? '<div class="tags">' + (r.id_articulo ? '<span class="tag id">ID ' + esc(r.id_articulo) + '</span>' : '') + (r.occ ? '<span class="tag occ">OCC ' + esc(r.occ) + '</span>' : '') + '</div>' : '') +
+              (r.id_articulo || r.occ || COND[r.condicion] ? '<div class="tags">' + (COND[r.condicion] ? '<span class="cond c-' + r.condicion + '">Entregada: ' + COND[r.condicion] + '</span>' : '') + (r.id_articulo ? '<span class="tag id">ID ' + esc(r.id_articulo) + '</span>' : '') + (r.occ ? '<span class="tag occ">OCC ' + esc(r.occ) + '</span>' : '') + '</div>' : '') +
               (r.notas ? '<p class="note">' + esc(r.notas) + '</p>' : '') +
               '<div class="itemMeta"><div>Te lo entregó<b>' + esc(r.entrego || "Almacén") + '</b></div><div>Cantidad<b>' + Number(r.cantidad || 1) + (Number(r.cantidad) > 1 ? ' piezas' : ' pieza') + '</b></div></div>' +
             '</article>';

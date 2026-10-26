@@ -110,6 +110,7 @@ alter table public.colaboradores add column if not exists nip_pendiente boolean 
 -- los colaboradores activos. Se guarda en mayúsculas y sin espacios.
 alter table public.colaboradores add column if not exists numero_empleado text;
 alter table public.colaboradores add column if not exists puesto text not null default '';
+alter table public.colaboradores add column if not exists localidad text not null default '';
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'colaboradores_numero_empleado_formato') then
     alter table public.colaboradores add constraint colaboradores_numero_empleado_formato
@@ -173,6 +174,37 @@ create table if not exists public.resguardos (
   import_key        text unique
 );
 create index if not exists resguardos_colab_activo_idx on public.resguardos (colaborador_id) where estado = 'activo';
+-- Condición en que se entregó la herramienta (NULL = registros anteriores a este campo).
+alter table public.resguardos add column if not exists condicion text;
+-- Última revisión física (auditoría) mientras está en resguardo.
+alter table public.resguardos add column if not exists revision_en        timestamptz;
+alter table public.resguardos add column if not exists revision_resultado text;
+alter table public.resguardos add column if not exists revision_por       text not null default '';
+alter table public.resguardos add column if not exists revision_nota      text not null default '';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'resguardos_condicion_valida') then
+    alter table public.resguardos add constraint resguardos_condicion_valida
+      check (condicion is null or condicion in ('nuevo', 'usado_bueno', 'usado_malo'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'resguardos_revision_valida') then
+    alter table public.resguardos add constraint resguardos_revision_valida
+      check ((revision_resultado is null or revision_resultado in ('bien', 'danada', 'no_localizada')) and char_length(revision_nota) <= 300);
+  end if;
+end $$;
+
+-- Constancias de no adeudo (las emite solo personal de almacén con sesión).
+create table if not exists public.constancias (
+  id                 uuid primary key default gen_random_uuid(),
+  folio              bigint generated always as identity unique,
+  colaborador_id     uuid not null references public.colaboradores (id) on delete restrict,
+  emitida_en         timestamptz not null default now(),
+  emitida_por_id     uuid,
+  emitida_por        text not null default '',
+  emitida_por_cargo  text not null default '',
+  resguardos_cerrados int not null default 0,
+  codigo             text not null
+);
+create index if not exists constancias_colab_idx on public.constancias (colaborador_id, emitida_en desc);
 create index if not exists resguardos_grupo_idx on public.resguardos (grupo_id);
 create index if not exists resguardos_creado_idx on public.resguardos (creado_en desc, id);
 
@@ -281,7 +313,9 @@ returns jsonb language sql stable set search_path = '' as $$
     'id', r.id, 'grupo_id', r.grupo_id, 'colaborador_id', r.colaborador_id,
     'herramienta', r.herramienta, 'cantidad', r.cantidad, 'occ', r.occ, 'id_articulo', r.id_articulo,
     'fecha_prestamo', r.fecha_prestamo, 'fecha_devolucion', r.fecha_devolucion, 'estado', r.estado,
-    'notas', r.notas, 'creado_por', r.creado_por, 'devuelto_por', r.devuelto_por, 'creado_en', r.creado_en)
+    'notas', r.notas, 'creado_por', r.creado_por, 'devuelto_por', r.devuelto_por, 'creado_en', r.creado_en,
+    'condicion', r.condicion, 'revision_en', r.revision_en, 'revision_resultado', r.revision_resultado,
+    'revision_por', r.revision_por, 'revision_nota', r.revision_nota)
 $$;
 
 -- Perfil automático al crear un usuario en Supabase Auth (nace inactivo).
@@ -391,6 +425,10 @@ begin
     if char_length(coalesce(v_item ->> 'occ', '')) > 60 or char_length(coalesce(v_item ->> 'id_articulo', '')) > 60 then
       raise exception using errcode = '22023', message = 'OCC e ID de artículo admiten máximo 60 caracteres.';
     end if;
+    if coalesce(v_item ->> 'condicion', '') not in ('nuevo', 'usado_bueno', 'usado_malo') then
+      raise exception using errcode = '22023',
+        message = 'Indica la condición de cada herramienta (Nuevo, Usado en buen estado o Usado en mal estado). Si no ves esa opción, recarga la página con Ctrl+F5.';
+    end if;
   end loop;
   v_fecha := coalesce(p_fecha, v_hoy);
   if v_fecha > v_hoy then
@@ -483,8 +521,8 @@ begin
     v_occ  := btrim(coalesce(v_item ->> 'occ', ''));
     v_ida  := btrim(coalesce(v_item ->> 'id_articulo', ''));
     insert into public.resguardos (grupo_id, colaborador_id, herramienta, cantidad, occ, id_articulo,
-                                   fecha_prestamo, estado, notas, creado_por, creado_por_id)
-    values (v_grupo, p_colaborador_id, v_herr, v_cant, v_occ, v_ida, v_fecha, 'activo', v_notas, v_user, v_uid)
+                                   fecha_prestamo, estado, notas, creado_por, creado_por_id, condicion)
+    values (v_grupo, p_colaborador_id, v_herr, v_cant, v_occ, v_ida, v_fecha, 'activo', v_notas, v_user, v_uid, v_item ->> 'condicion')
     returning * into v_row;
     v_rows := v_rows || jsonb_build_array(app.resguardo_json(v_row));
 
@@ -691,9 +729,10 @@ begin
                  case when v_orig.numero_empleado <> '' then ' (#' || v_orig.numero_empleado || ')' else '' end ||
                  case when v_row.notas <> '' then '. ' || v_row.notas else '' end, 500);
   insert into public.resguardos (grupo_id, colaborador_id, herramienta, cantidad, occ, id_articulo,
-                                 fecha_prestamo, estado, notas, creado_por, creado_por_id)
+                                 fecha_prestamo, estado, notas, creado_por, creado_por_id, condicion)
   values (v_grupo, v_dest.id, v_row.herramienta, v_row.cantidad, v_row.occ, v_row.id_articulo,
-          app.hoy(), 'activo', v_nota, v_user, v_uid)
+          app.hoy(), 'activo', v_nota, v_user, v_uid,
+          case when v_row.revision_resultado = 'danada' then 'usado_malo' else v_row.condicion end)
   returning * into v_new;
 
   perform app.log('resguardo_transferido', 'resguardo', v_new.id::text,
@@ -848,6 +887,68 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
+-- ---------- Revisión física (auditoría) de una herramienta en resguardo ----------
+-- Cualquier usuario activo de almacén. Queda en el resguardo y en la bitácora.
+create or replace function public.registrar_revision(p_resguardo_id uuid, p_resultado text, p_nota text default '')
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare v_row public.resguardos%rowtype; v_user text; v_nota text := btrim(coalesce(p_nota, '')); v_col text;
+begin
+  perform app.exigir(array['admin', 'supervisor', 'almacen']);
+  v_user := app.nombre_actual();
+  if p_resultado is null or p_resultado not in ('bien', 'danada', 'no_localizada') then
+    raise exception using errcode = '22023', message = 'Elige el resultado de la revisión.';
+  end if;
+  if char_length(v_nota) > 300 then
+    raise exception using errcode = '22023', message = 'La nota admite máximo 300 caracteres.';
+  end if;
+  if p_resultado <> 'bien' and v_nota = '' then
+    raise exception using errcode = '22023', message = 'Escribe una nota breve: qué daño tiene o dónde se buscó.';
+  end if;
+  update public.resguardos
+     set revision_en = now(), revision_resultado = p_resultado, revision_por = v_user, revision_nota = v_nota, actualizado_en = now()
+   where id = p_resguardo_id and estado = 'activo'
+  returning * into v_row;
+  if not found then
+    raise exception using errcode = '22023', message = 'Ese resguardo no existe o ya no está activo.';
+  end if;
+  select c.nombre into v_col from public.colaboradores c where c.id = v_row.colaborador_id;
+  perform app.log('resguardo_revisado', 'resguardo', v_row.id::text,
+    jsonb_build_object('herramienta', v_row.herramienta, 'colaborador', v_col, 'resultado', p_resultado, 'nota', v_nota));
+  return app.resguardo_json(v_row);
+end $$;
+
+-- ---------- Constancia de no adeudo ----------
+-- Solo personal de almacén con sesión (almacén, supervisor o admin). La base
+-- comprueba que el colaborador NO tenga herramienta activa al momento de emitirla.
+create or replace function public.emitir_constancia(p_colaborador_id uuid)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_rol text; v_col public.colaboradores%rowtype; v_activos int; v_cerrados int; v_c public.constancias%rowtype;
+  v_cargo text;
+begin
+  v_rol := app.exigir(array['admin', 'supervisor', 'almacen']);
+  -- Bloquea al colaborador mientras se emite (ningún préstamo simultáneo se cuela).
+  select * into v_col from public.colaboradores where id = p_colaborador_id and activo for update;
+  if not found then
+    raise exception using errcode = '22023', message = 'Colaborador no encontrado o dado de baja.';
+  end if;
+  select count(*) filter (where estado = 'activo'), count(*) filter (where estado <> 'activo')
+    into v_activos, v_cerrados from public.resguardos where colaborador_id = p_colaborador_id;
+  if v_activos > 0 then
+    raise exception using errcode = '22023',
+      message = v_col.nombre || ' tiene ' || v_activos || ' herramienta(s) en resguardo. Primero deben devolverse o transferirse.';
+  end if;
+  select coalesce(nullif(p.cargo, ''), case p.rol when 'admin' then 'Administrador' when 'supervisor' then 'Supervisor' else 'Almacén' end)
+    into v_cargo from public.perfiles p where p.id = auth.uid();
+  insert into public.constancias (colaborador_id, emitida_por_id, emitida_por, emitida_por_cargo, resguardos_cerrados, codigo)
+  values (p_colaborador_id, auth.uid(), coalesce(app.nombre_actual(), ''), coalesce(v_cargo, ''), v_cerrados,
+          upper(substr(encode(extensions.gen_random_bytes(6), 'hex'), 1, 4) || '-' || substr(encode(extensions.gen_random_bytes(6), 'hex'), 1, 4)))
+  returning * into v_c;
+  perform app.log('constancia_emitida', 'colaborador', p_colaborador_id::text,
+    jsonb_build_object('colaborador', v_col.nombre, 'numero_empleado', v_col.numero_empleado, 'folio', v_c.folio, 'codigo', v_c.codigo));
+  return to_jsonb(v_c);
+end $$;
+
 -- ---------- Cuentas de usuario (solo admin + contraseña reciente) ----------
 create or replace function public.admin_actualizar_usuario(p_id uuid, p_rol text, p_activo boolean)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
@@ -921,7 +1022,7 @@ end $$;
 create or replace function public.importar_colaboradores(p jsonb, p_actualizar boolean default false)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
 declare
-  v_e jsonb; v_num text; v_nombre text; v_area text; v_puesto text;
+  v_e jsonb; v_num text; v_nombre text; v_area text; v_puesto text; v_loc text;
   v_id uuid; v_old public.colaboradores%rowtype;
   n_nuevos int := 0; n_act int := 0; n_igual int := 0;
   v_omitidos jsonb := '[]'::jsonb;
@@ -937,16 +1038,17 @@ begin
     v_nombre := regexp_replace(btrim(coalesce(v_e ->> 'nombre', '')), '\s+', ' ', 'g');
     v_area   := left(btrim(coalesce(v_e ->> 'area', '')), 80);
     v_puesto := left(btrim(coalesce(v_e ->> 'puesto', '')), 80);
+    v_loc    := left(btrim(coalesce(v_e ->> 'localidad', '')), 60);
     if v_num is null or v_num !~ '^[A-Z0-9][A-Z0-9._/-]{0,29}$' or char_length(v_nombre) not between 1 and 120 then
       v_omitidos := v_omitidos || jsonb_build_array(jsonb_build_object('numero_empleado', v_e ->> 'numero_empleado', 'motivo', 'datos no válidos'));
       continue;
     end if;
     select * into v_old from public.colaboradores where activo and numero_empleado = v_num;
     if found then
-      if v_old.nombre = v_nombre and v_old.area = v_area and v_old.puesto = v_puesto then
+      if v_old.nombre = v_nombre and v_old.area = v_area and v_old.puesto = v_puesto and v_old.localidad = v_loc then
         n_igual := n_igual + 1;
       elsif p_actualizar then
-        update public.colaboradores set nombre = v_nombre, area = v_area, puesto = v_puesto where id = v_old.id;
+        update public.colaboradores set nombre = v_nombre, area = v_area, puesto = v_puesto, localidad = v_loc where id = v_old.id;
         n_act := n_act + 1;
       else
         v_omitidos := v_omitidos || jsonb_build_array(jsonb_build_object('numero_empleado', v_num,
@@ -954,8 +1056,8 @@ begin
       end if;
       continue;
     end if;
-    insert into public.colaboradores (numero_empleado, nombre, area, puesto, nip_pendiente)
-    values (v_num, v_nombre, v_area, v_puesto, true);
+    insert into public.colaboradores (numero_empleado, nombre, area, puesto, localidad, nip_pendiente)
+    values (v_num, v_nombre, v_area, v_puesto, v_loc, true);
     n_nuevos := n_nuevos + 1;
   end loop;
   insert into public.bitacora (usuario, accion, entidad, detalle)
@@ -981,6 +1083,7 @@ begin
                           'activado_en', x.activado_en)), '[]') from app.portal_cuenta x),
     'herramientas',    (select coalesce(jsonb_agg(to_jsonb(x) - 'nombre_norm' order by x.nombre), '[]') from public.herramientas x),
     'resguardos',      (select coalesce(jsonb_agg(to_jsonb(x) order by x.creado_en), '[]') from public.resguardos x),
+    'constancias',     (select coalesce(jsonb_agg(to_jsonb(x) order by x.folio), '[]') from public.constancias x),
     'bitacora',        (select coalesce(jsonb_agg(to_jsonb(x) order by x.id), '[]') from public.bitacora x));
 end $$;
 
@@ -1383,7 +1486,8 @@ begin
     'resguardos', coalesce((select jsonb_agg(jsonb_build_object(
         'id', r.id, 'herramienta', r.herramienta, 'cantidad', r.cantidad, 'occ', r.occ, 'id_articulo', r.id_articulo,
         'fecha_prestamo', r.fecha_prestamo, 'fecha_devolucion', r.fecha_devolucion, 'estado', r.estado,
-        'notas', r.notas, 'entrego', r.creado_por, 'recibio', r.devuelto_por, 'creado_en', r.creado_en)
+        'notas', r.notas, 'entrego', r.creado_por, 'recibio', r.devuelto_por, 'creado_en', r.creado_en,
+        'condicion', r.condicion)
         order by r.estado, coalesce(r.fecha_devolucion, r.fecha_prestamo) desc, r.creado_en desc)
       from public.resguardos r where r.colaborador_id = v_id), '[]'::jsonb));
 end $$;
@@ -1542,6 +1646,7 @@ alter table public.colaboradores enable row level security;
 alter table public.herramientas  enable row level security;
 alter table public.resguardos    enable row level security;
 alter table public.bitacora      enable row level security;
+alter table public.constancias   enable row level security;
 alter table app.colaborador_nip  enable row level security;   -- sin políticas: nadie del cliente
 
 drop policy if exists perfiles_leer on public.perfiles;
@@ -1560,6 +1665,10 @@ drop policy if exists resguardos_leer on public.resguardos;
 create policy resguardos_leer on public.resguardos for select to authenticated
   using ((select app.usuario_activo()));
 
+drop policy if exists constancias_leer on public.constancias;
+create policy constancias_leer on public.constancias for select to authenticated
+  using ((select app.usuario_activo()));
+
 drop policy if exists bitacora_leer on public.bitacora;
 create policy bitacora_leer on public.bitacora for select to authenticated
   using ((select app.es_admin()));
@@ -1568,9 +1677,9 @@ create policy bitacora_leer on public.bitacora for select to authenticated
 -- PERMISOS (GRANT/REVOKE). Supabase concede por defecto todo a anon y
 -- authenticated en el esquema public; aquí se retira y se concede lo mínimo.
 -- =====================================================================
-revoke all on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora
+revoke all on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora, public.constancias
   from public, anon, authenticated;
-grant select on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora
+grant select on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora, public.constancias
   to authenticated;
 revoke all on app.colaborador_nip, app.ajustes from public, anon, authenticated;
 
@@ -1604,7 +1713,9 @@ grant execute on function
   public.editar_fecha_prestamo(uuid, date),
   public.agregar_herramienta(text, text),
   public.eliminar_herramienta(uuid),
-  public.admin_actualizar_usuario(uuid, text, boolean)
+  public.admin_actualizar_usuario(uuid, text, boolean),
+  public.registrar_revision(uuid, text, text),
+  public.emitir_constancia(uuid)
 to authenticated;
 
 -- Portal del colaborador: lo llama la página colaborador.html sin cuenta de

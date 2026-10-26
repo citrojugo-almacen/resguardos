@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#26402B" />
 <!-- Misma política de seguridad que index.html: solo scripts propios y Supabase. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src https://*.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'; upgrade-insecure-requests" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src https://svfpdejuhruojytqriji.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'; upgrade-insecure-requests" />
 <meta name="referrer" content="no-referrer" />
 <meta name="robots" content="noindex, nofollow" />
 <style>
@@ -275,6 +275,11 @@
   .tag{font-size:12px;font-weight:500;border-radius:7px;padding:3px 8px;font-family:var(--mono);}
   .tag.id{color:var(--infoInk);background:var(--infoBg);}
   .tag.occ{color:var(--warnInk);background:var(--warnBg);}
+  .cond{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;border-radius:999px;padding:3px 9px 3px 8px;}
+  .cond::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;}
+  .cond.c-nuevo{color:var(--okInk);background:var(--okBg);}
+  .cond.c-usado_bueno{color:var(--infoInk);background:var(--infoBg);}
+  .cond.c-usado_malo{color:var(--warnInk);background:var(--warnBg);}
   .note{margin:10px 0 0;font-size:13.5px;color:var(--label2);line-height:1.45;}
 
   /* Historial en línea de tiempo (secuencia real de movimientos) */

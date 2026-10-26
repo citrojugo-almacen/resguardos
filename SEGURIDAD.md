@@ -335,3 +335,47 @@ select portal_max_intentos, portal_bloqueo_minutos, portal_ip_max_fallos_hora,
 ```
 
 **Lista de colaboradores**: se carga con `carga_colaboradores.sql` (generado del Excel oficial; solo ESTATUS A y R). Pégalo en el SQL Editor y ejecútalo. Se puede repetir sin duplicar; actualiza nombre, departamento, puesto y localidad. **No lo subas a GitHub**: contiene nombres del personal.
+
+## 12. Condición de entrega, auditoría y constancias
+
+### Condición de la herramienta
+Al armar un resguardo, cada herramienta lleva **obligatoriamente** su condición: **Nuevo**, **Usado en buen estado** o **Usado en mal estado**. La base rechaza préstamos sin ella. La condición se ve en las tarjetas, en la Tabla completa y en el portal del colaborador ("Entregada: …"). En una transferencia se conserva; si la última revisión la marcó como dañada, pasa como "Usado en mal estado".
+
+### Auditoría (menú Control → Auditoría)
+Sugerencias de revisión física ordenadas por prioridad:
+
+| Prioridad | Qué muestra |
+|---|---|
+| Alta | Herramienta **no localizada** en la última revisión. |
+| Alta | Herramienta **dañada** o entregada en mal estado (sin revisión que diga que está bien). |
+| Media | Resguardos de **más de 180 días** sin revisión en los últimos 90 días. |
+| Media | Colaboradores con **5 o más** herramientas. |
+| Media | Herramienta **sin código** de artículo (fuera del catálogo; no concilia con AX). |
+| Seguimiento | **Muestra aleatoria semanal** de 10 resguardos (conteo cíclico; cambia cada lunes y todos ven la misma). |
+| Seguimiento | Colaboradores con herramienta que **no han activado su portal**. |
+
+- Cada grupo tiene **Imprimir lista de verificación** (hoja carta con casillas Bien / Dañada / No localizada y firmas).
+- **Registrar revisión** (en la tarjeta o en Auditoría): resultado + nota (obligatoria si está dañada o no se encontró). Queda en el resguardo y en la bitácora (`resguardo_revisado`) a nombre de quien la registró. Cualquier usuario activo de almacén puede registrarla.
+
+### Constancia de no adeudo (menú Control → Constancias)
+- La emite **solo personal de almacén con sesión** (almacén, supervisor o administrador). Los colaboradores no pueden emitirla desde su portal.
+- La base **revisa en el momento** que el colaborador no tenga herramienta activa (y bloquea su registro mientras la emite, para que no se cuele un préstamo simultáneo). Si tiene adeudo, muestra la lista de lo pendiente.
+- Cada constancia tiene **folio consecutivo** (CNA-000001…) y **código de verificación**; queda en la tabla `constancias` y en la bitácora (`constancia_emitida`). Para verificar una constancia impresa, búscala en "Constancias emitidas".
+- Se imprime en **tamaño carta** (firma de quien expide y de quien recibe). Las reimpresiones dicen "Reimpresión del folio emitido el …".
+- Lugar de expedición: "Tecomán, Colima". Para cambiarlo, agrega `lugarExpedicion: "Ciudad, Estado"` en `config.js`.
+- También se llega desde Colaboradores: botón **Constancia** junto a quien no tiene herramienta en resguardo.
+
+```sql
+-- Constancias emitidas
+select folio, codigo, emitida_en, emitida_por, (select nombre from public.colaboradores c where c.id = k.colaborador_id) as colaborador
+  from public.constancias k order by folio desc;
+
+-- Revisiones de los últimos 30 días
+select ts, usuario, detalle->>'colaborador' as colaborador, detalle->>'herramienta' as herramienta, detalle->>'resultado' as resultado, detalle->>'nota' as nota
+  from public.bitacora where accion = 'resguardo_revisado' and ts > now() - interval '30 days' order by ts desc;
+```
+
+### Otros ajustes de esta versión
+- La política de seguridad de contenido (CSP) de `index.html` y `colaborador.html` ahora solo permite conectarse al proyecto de Supabase de Citrojugo (`svfpdejuhruojytqriji.supabase.co`). **Si algún día cambias de proyecto de Supabase**, actualiza esa línea en ambos archivos además de `config.js`.
+- `importar_colaboradores` ahora también guarda la **localidad**.
+- Catálogo precargado con los 1,329 artículos **HYE** del Excel de productos (los SHYE no se cargan). En "Nuevo resguardo" se buscan por código o por nombre.
