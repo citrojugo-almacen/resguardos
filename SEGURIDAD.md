@@ -292,9 +292,17 @@ Cada colaborador puede consultar desde su celular **solo sus** resguardos: lo qu
 2. **Primera vez**: número de empleado y, como contraseña, **el mismo número**. Eso no muestra ningún dato: solo abre una ventana de 10 minutos para crear su contraseña.
 3. Para crearla escribe su **nombre completo como viene en la relación de colaboradores** (apellidos y nombre(s); no importan mayúsculas, acentos ni comas) y una contraseña de al menos 8 caracteres con una letra y un número.
 4. Desde ese momento el número **ya no sirve** como contraseña.
-5. Para cambiar su contraseña después: botón de la llave → nombre completo + contraseña actual + la nueva.
+5. Enseguida el portal le pide **crear su NIP** (4 números, con teclado y confirmación). Si el almacén ya le había asignado uno, puede conservarlo o cambiarlo.
+6. Después puede **cambiar su NIP** desde la tarjeta "Tu NIP de almacén": teclea el actual y luego el nuevo dos veces. **Máximo un cambio cada 24 horas.**
+7. Para cambiar su contraseña: botón de la llave → nombre completo + contraseña actual + la nueva.
 
-**Si la olvida o quedó bloqueado**: en la app de almacén → Colaboradores → botón **Portal** junto a su nombre → un supervisor confirma con su correo y contraseña. Su contraseña vuelve a ser su número de empleado (una sola vez) y deberá crear una nueva.
+**Contraseña y NIP no son lo mismo** (el portal se lo explica antes de cada uno):
+- La **contraseña** solo sirve para entrar al portal y consultar. No recibe ni mueve herramienta.
+- El **NIP** es su firma en el almacén: lo teclea al recibir herramienta o cuando se la transfieren. Los NIP muy fáciles (1111, 1234, 4321… o su número de empleado) se rechazan.
+
+**Si la olvida o quedó bloqueado**: en la app de almacén → Colaboradores → botón **Portal** junto a su nombre → un supervisor confirma con su correo y contraseña. Su contraseña vuelve a ser su número de empleado (una sola vez) y deberá crear una nueva. **Si su NIP lo había creado él en el portal, también se anula** y lo creará de nuevo al entrar (así, si alguien más se apropió de su portal, no se queda con un NIP para firmar a su nombre). Un NIP asignado por un supervisor no se toca.
+
+**Si olvida su NIP**: el supervisor se lo cambia como siempre (Colaboradores → NIP), o se restablece su portal y lo crea de nuevo.
 
 **Cómo está protegido**
 
@@ -307,8 +315,9 @@ Cada colaborador puede consultar desde su celular **solo sus** resguardos: lo qu
 | Llenar la base con peticiones | Máximo 3 sesiones abiertas por colaborador y los ingresos se anotan en la bitácora como máximo una vez cada 30 min. |
 | Robo de la sesión | Token aleatorio de 256 bits; la base guarda solo su huella SHA-256. Vence a los 15 min sin uso o a las 8 h. Se guarda en `sessionStorage` (se borra al cerrar el navegador). |
 | Contraseñas | bcrypt en el esquema privado `app`, igual que los NIP. |
+| Cambiar el NIP de otro | Exige sesión del portal y, si ya tiene NIP, teclear el actual (mismo bloqueo de 5 intentos que en el almacén). Un cambio cada 24 h. Queda en la bitácora (`portal_nip_creado`, `portal_nip_cambiado`). |
 
-**Riesgo que queda**: un compañero que conozca el número **y el nombre completo** de alguien que aún no activó su portal podría activarlo antes que él y ver su lista de herramientas (no puede modificar nada). El dueño lo notaría: al intentar con su número, el portal le avisa que "este número ya creó su contraseña", y en su gafete aparece la fecha en que se creó; en ese caso, restablece su acceso con el botón **Portal** y revisa la bitácora. Conviene pedir a todos que activen su portal en los primeros días.
+**Riesgo que queda**: un compañero que conozca el número **y el nombre completo** de alguien que aún no activó su portal podría activarlo antes que él, ver su lista de herramientas y **crearle un NIP**. Con ese NIP podría firmar préstamos a su nombre si se presenta en el almacén; por eso el almacenista debe confirmar que quien teclea el NIP es la persona del resguardo. El dueño lo notaría: al intentar con su número, el portal le avisa que "este número ya creó su contraseña", y en su gafete aparece la fecha en que se creó; en ese caso, restablece su acceso con el botón **Portal** y revisa la bitácora. Conviene pedir a todos que activen su portal en los primeros días.
 
 **Consultas útiles**
 

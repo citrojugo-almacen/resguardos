@@ -138,6 +138,9 @@ create table if not exists app.colaborador_nip (
 );
 
 alter table app.colaborador_nip add column if not exists nip_importado boolean not null default false;
+-- Quién puso el NIP vigente ('almacen' = supervisor, 'portal' = el propio colaborador) y cuándo lo cambió desde el portal.
+alter table app.colaborador_nip add column if not exists nip_origen text not null default 'almacen';
+alter table app.colaborador_nip add column if not exists portal_cambiado_en timestamptz;
 
 create table if not exists public.herramientas (
   id           uuid primary key default gen_random_uuid(),
@@ -788,7 +791,7 @@ begin
   values (p_colaborador_id, extensions.crypt(p_nip, extensions.gen_salt('bf', 10)))
   on conflict (colaborador_id) do update
     set nip_hash = excluded.nip_hash, nip_por_defecto = false, nip_importado = false, intentos_fallidos = 0, bloqueos = 0,
-        bloqueado_hasta = null, actualizado_en = now();
+        bloqueado_hasta = null, actualizado_en = now(), nip_origen = 'almacen';
   update public.colaboradores set nip_pendiente = false where id = p_colaborador_id;
   perform app.log('nip_cambiado', 'colaborador', p_colaborador_id::text, '{}'::jsonb);
   return jsonb_build_object('ok', true);
@@ -1358,15 +1361,22 @@ declare
   v_id  uuid := app.portal_sesion_valida(p_token, 'activa');
   v_col public.colaboradores%rowtype;
   v_c   app.portal_cuenta%rowtype;
+  v_n   app.colaborador_nip%rowtype;
 begin
   if v_id is null then
     return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
   end if;
   select * into v_col from public.colaboradores where id = v_id;
   select * into v_c from app.portal_cuenta where colaborador_id = v_id;
+  select * into v_n from app.colaborador_nip where colaborador_id = v_id;
   update app.portal_cuenta set ultimo_acceso = now() where colaborador_id = v_id;
   return jsonb_build_object('ok', true,
     'hoy', app.hoy(),
+    'nip', jsonb_build_object(
+      'tiene', v_n.colaborador_id is not null and not v_col.nip_pendiente,
+      'origen', v_n.nip_origen,
+      'puede_cambiar_desde', case when v_n.portal_cambiado_en > now() - interval '24 hours' then v_n.portal_cambiado_en + interval '24 hours' end,
+      'bloqueado_hasta', case when v_n.bloqueado_hasta > now() then v_n.bloqueado_hasta end),
     'perfil', jsonb_build_object('nombre', v_col.nombre, 'numero_empleado', v_col.numero_empleado,
                                  'puesto', v_col.puesto, 'area', v_col.area, 'localidad', v_col.localidad,
                                  'activado_en', v_c.activado_en, 'ultimo_acceso', v_c.ultimo_acceso),
@@ -1413,6 +1423,76 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
+-- 4b) Crear o cambiar mi NIP desde el portal.
+--  * Sin NIP (nuevo o pendiente): lo crea con su sesión del portal.
+--  * Con NIP: debe teclear el actual (mismo bloqueo por intentos que en el almacén).
+--  * Máximo un cambio cada 24 horas.
+create or replace function app.nip_error(p_nip text, p_num text)
+returns text language plpgsql immutable set search_path = '' as $$
+begin
+  if p_nip is null or p_nip !~ '^[0-9]{4}$' then return 'El NIP debe tener exactamente 4 números.'; end if;
+  if p_nip ~ '^(.)\1{3}$' then return 'Evita números repetidos como 1111 o 0000.'; end if;
+  if p_nip in ('1234', '2345', '3456', '4567', '5678', '6789', '0123', '9876', '8765', '7654', '6543', '5432', '4321', '3210') then
+    return 'Evita números seguidos como 1234; son los primeros que alguien intentaría.';
+  end if;
+  if p_nip = right(coalesce(p_num, ''), 4) then return 'Tu NIP no puede ser tu número de empleado.'; end if;
+  return null;
+end $$;
+
+create or replace function public.colab_establecer_nip(p_token text, p_nip_actual text, p_nip_nuevo text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id   uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_col  public.colaboradores%rowtype;
+  v_n    app.colaborador_nip%rowtype;
+  v_cfg  app.ajustes%rowtype;
+  v_err  text;
+  v_res  jsonb;
+  v_tiene boolean;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+  select * into v_cfg from app.ajustes where id = 1;
+  select * into v_col from public.colaboradores where id = v_id for update;
+  v_err := app.nip_error(p_nip_nuevo, v_col.numero_empleado);
+  if v_err is not null then return jsonb_build_object('ok', false, 'error', 'nip_formato', 'mensaje', v_err); end if;
+
+  select * into v_n from app.colaborador_nip where colaborador_id = v_id for update;
+  v_tiene := found and not v_col.nip_pendiente;
+  if v_tiene then
+    if v_n.portal_cambiado_en is not null and v_n.portal_cambiado_en > now() - interval '24 hours' then
+      return jsonb_build_object('ok', false, 'error', 'espera', 'puede_cambiar_desde', v_n.portal_cambiado_en + interval '24 hours',
+        'mensaje', 'Solo puedes cambiar tu NIP una vez cada 24 horas. Podrás hacerlo de nuevo el ' ||
+                   to_char((v_n.portal_cambiado_en + interval '24 hours') at time zone v_cfg.zona_horaria, 'DD/MM "a las" HH24:MI') || '.');
+    end if;
+    v_res := app.verificar_nip(v_id, p_nip_actual);
+    if v_res is not null then
+      return case v_res ->> 'error'
+        when 'nip_incorrecto' then jsonb_build_object('ok', false, 'error', 'nip_actual',
+          'mensaje', 'Tu NIP actual no es correcto. Te quedan ' || (v_res ->> 'intentos_restantes') || ' intento(s).')
+        when 'bloqueado' then jsonb_build_object('ok', false, 'error', 'nip_bloqueado',
+          'mensaje', 'Tu NIP quedó bloqueado por intentos fallidos. Intenta después de las ' ||
+                     to_char((v_res ->> 'bloqueado_hasta')::timestamptz at time zone v_cfg.zona_horaria, 'HH24:MI') || ' o acude al almacén.')
+        when 'nip_formato' then jsonb_build_object('ok', false, 'error', 'nip_actual', 'mensaje', 'Escribe tu NIP actual de 4 números.')
+        else jsonb_build_object('ok', false, 'error', 'nip_actual', 'mensaje', 'No se pudo verificar tu NIP actual. Acude al almacén.')
+      end;
+    end if;
+    if extensions.crypt(p_nip_nuevo, v_n.nip_hash) = v_n.nip_hash then
+      return jsonb_build_object('ok', false, 'error', 'nip_formato', 'mensaje', 'El NIP nuevo debe ser distinto del actual.');
+    end if;
+  end if;
+
+  insert into app.colaborador_nip (colaborador_id, nip_hash, nip_origen, portal_cambiado_en)
+  values (v_id, extensions.crypt(p_nip_nuevo, extensions.gen_salt('bf', 10)), 'portal', now())
+  on conflict (colaborador_id) do update
+    set nip_hash = excluded.nip_hash, nip_por_defecto = false, nip_importado = false, intentos_fallidos = 0, bloqueos = 0,
+        bloqueado_hasta = null, actualizado_en = now(), nip_origen = 'portal', portal_cambiado_en = now();
+  update public.colaboradores set nip_pendiente = false where id = v_id;
+  perform app.portal_log(case when v_tiene then 'portal_nip_cambiado' else 'portal_nip_creado' end, v_col);
+  return jsonb_build_object('ok', true, 'creado', not v_tiene, 'puede_cambiar_desde', now() + interval '24 hours');
+end $$;
+
 -- 5) Cerrar sesión.
 create or replace function public.colab_logout(p_token text)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
@@ -1426,16 +1506,21 @@ end $$;
 -- 6) (App de almacén) Restablecer el acceso al portal: supervisor/admin + contraseña.
 create or replace function public.restablecer_portal_colaborador(p_colaborador_id uuid)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
-declare v_col public.colaboradores%rowtype;
+declare v_col public.colaboradores%rowtype; v_borrados int := 0;
 begin
   perform app.exigir(array['admin', 'supervisor'], true);
   select * into v_col from public.colaboradores where id = p_colaborador_id and activo;
   if not found then raise exception using errcode = '22023', message = 'Colaborador no encontrado.'; end if;
   delete from app.portal_sesion where colaborador_id = p_colaborador_id;
   delete from app.portal_cuenta where colaborador_id = p_colaborador_id;
+  -- Si el NIP vigente se creó desde el portal, también se anula: si alguien más se
+  -- apropió de la cuenta, no puede quedarse con un NIP para firmar préstamos.
+  delete from app.colaborador_nip where colaborador_id = p_colaborador_id and nip_origen = 'portal';
+  get diagnostics v_borrados = row_count;
+  if v_borrados > 0 then update public.colaboradores set nip_pendiente = true where id = p_colaborador_id; end if;
   perform app.log('portal_restablecido', 'colaborador', p_colaborador_id::text,
-                  jsonb_build_object('colaborador', v_col.nombre, 'numero_empleado', v_col.numero_empleado));
-  return jsonb_build_object('ok', true);
+                  jsonb_build_object('colaborador', v_col.nombre, 'numero_empleado', v_col.numero_empleado, 'nip_anulado', v_borrados > 0));
+  return jsonb_build_object('ok', true, 'nip_anulado', v_borrados > 0);
 end $$;
 
 -- 7) (App de almacén) Estado del portal de cada colaborador (sin datos sensibles).
@@ -1529,7 +1614,8 @@ grant execute on function
   public.colab_activar(text, text, text),
   public.colab_mis_resguardos(text),
   public.colab_cambiar_password(text, text, text, text),
-  public.colab_logout(text)
+  public.colab_logout(text),
+  public.colab_establecer_nip(text, text, text)
 to anon, authenticated;
 grant execute on function public.restablecer_portal_colaborador(uuid), public.estado_portal_colaboradores() to authenticated;
 

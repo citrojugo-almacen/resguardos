@@ -21,7 +21,9 @@
 
   var app = document.getElementById("app");
   var st = {
-    view: "login",             // login | activar | portal
+    view: "login",             // login | activar | nip | portal
+    nip: null,                 // flujo de NIP: {modo, pasos, paso, digitos, valores, error, pending, obligatorio, recienActivado, listo}
+    recienActivado: false,
     pending: false, error: "", info: "",
     numero: "",
     token: null,               // sesión activa
@@ -78,6 +80,8 @@
       out:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>',
       back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>',
       move:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h14"/><path d="m14 4 4 4-4 4"/><path d="M20 16H6"/><path d="m10 12-4 4 4 4"/></svg>',
+      pad:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="3"/><circle cx="9" cy="8" r=".6" fill="currentColor"/><circle cx="15" cy="8" r=".6" fill="currentColor"/><circle cx="9" cy="12.5" r=".6" fill="currentColor"/><circle cx="15" cy="12.5" r=".6" fill="currentColor"/><circle cx="9" cy="17" r=".6" fill="currentColor"/><circle cx="15" cy="17" r=".6" fill="currentColor"/></svg>',
+      del:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/></svg>',
       box:'<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg>'
     };
     return I[n] || "";
@@ -213,6 +217,7 @@
         '<h1 class="stepTitle">Crea tu contraseña</h1>' +
         '<p class="stepSub">Colaborador <span class="numTag">#' + esc(st.actNumero) + '</span>. Para confirmar que eres tú, escribe tu nombre completo como aparece en tu registro de la empresa.</p></div>' +
       '<div class="timer' + (left < 120 ? ' low' : '') + '" id="act-timer"><span id="act-left">' + mmss(left) + '</span><div class="timerTrack"><div class="timerFill" id="act-fill" style="transform:scaleX(' + (left / st.actTotal).toFixed(3) + ')"></div></div></div>' +
+      '<div class="explain">' + icon("key") + '<span><b>¿Para qué sirve tu contraseña?</b> Para entrar a este portal y consultar la herramienta que tienes a tu nombre. Solo sirve para consultar: con ella no se puede recibir ni mover herramienta.</span></div>' +
       '<form id="f-activar" novalidate>' +
         '<div class="field"><label for="in-nombre">Nombre completo</label>' +
           '<input type="text" id="in-nombre" autocomplete="off" maxlength="160" spellcheck="false" placeholder="Apellido paterno, materno y nombre(s)"/>' +
@@ -229,6 +234,57 @@
       '<div class="loginFoot"><button type="button" class="link" data-action="cancel-act">Cancelar</button></div>' +
     '</div></div>';
   }
+  // ---------- NIP ----------
+  var PASO_TXT = { actual: "Escribe tu NIP actual", nuevo: "Escribe tu NIP nuevo", confirmar: "Escríbelo otra vez para confirmar" };
+  var PASO_CORTO = { actual: "Actual", nuevo: "Nuevo", confirmar: "Confirmar" };
+  function nipTpl(){
+    var f = st.nip, paso = f.pasos[f.paso];
+    var titulo = f.modo === "crear" ? "Crea tu NIP" : f.recienActivado ? "Tu NIP de almacén" : "Cambia tu NIP";
+    var sub = f.modo === "crear" ? "Último paso. Elige 4 números que solo tú conozcas."
+            : f.recienActivado ? "El almacén ya te asignó un NIP. Puedes conservarlo o cambiarlo por uno que elijas tú."
+            : "Para cambiarlo, primero confirma el que tienes ahora.";
+    if(f.listo){
+      return '<div class="loginShell"><div class="loginCard calm nipCardDone">' +
+        '<div class="nipDone"><span class="welcomeCheck">' + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>' +
+        '<b>' + (f.modo === "crear" ? "NIP creado" : "NIP actualizado") + '</b>' +
+        '<span>Úsalo en el almacén cuando recibas herramienta. Podrás cambiarlo de nuevo dentro de 24 horas.</span></div></div></div>';
+    }
+    var steps = f.pasos.map(function(k, i){
+      return (i ? '<span class="nipLine' + (i <= f.paso ? ' on' : '') + '"></span>' : '') +
+        '<span class="nipStep' + (i < f.paso ? ' done' : i === f.paso ? ' on' : '') + '"><i>' + (i < f.paso ? icon("check") : (i + 1)) + '</i><span>' + PASO_CORTO[k] + '</span></span>';
+    }).join("");
+    var dots = ""; for(var i=0;i<4;i++) dots += '<span class="dot' + (i < f.digitos.length ? ' filled' : '') + (f.err ? ' err' : '') + '"></span>';
+    var keys = ""; ["1","2","3","4","5","6","7","8","9"].forEach(function(k){ keys += '<button type="button" class="pinKey" data-action="pin" data-k="' + k + '">' + k + '</button>'; });
+    keys += '<span></span><button type="button" class="pinKey" data-action="pin" data-k="0">0</button>' +
+            '<button type="button" class="pinKey keyDel" data-action="pin-del" aria-label="Borrar">' + icon("del") + '</button>';
+    return '<div class="loginShell"><div class="loginCard' + cardCls("nip", " swap") + '">' +
+      '<div class="stepHead"><span class="stepIco">' + icon("pad") + '</span><h1 class="stepTitle">' + titulo + '</h1><p class="stepSub">' + sub + '</p></div>' +
+      (f.paso === 0 && !f.error ? '<div class="explain">' + icon("shield") + '<span><b>¿Para qué sirve tu NIP?</b> Es tu firma en el almacén: lo tecleas tú cuando recibes herramienta o cuando un compañero te la transfiere. Así nadie puede poner herramienta a tu nombre sin tu autorización. No lo compartas con nadie, ni con el personal del almacén. Es distinto de tu contraseña.</span></div>' : '') +
+      '<div class="nipSteps" aria-hidden="true">' + steps + '</div>' +
+      '<p class="nipPrompt" id="nip-prompt">' + PASO_TXT[paso] + '</p>' +
+      '<div class="pinDots" id="nip-dots" role="status" aria-label="' + f.digitos.length + ' de 4 números">' + dots + '</div>' +
+      (f.error ? '<p class="errorText nipErr" role="alert">' + icon("alert") + '<span>' + esc(f.error) + '</span></p>' : '') +
+      '<div class="pinGrid' + (f.pending ? ' busy' : '') + '">' + keys + '</div>' +
+      (f.pending ? '<p class="hint center">Guardando…</p>' : '') +
+      '<div class="loginFoot">' + (f.obligatorio ? '<button type="button" class="link" data-action="logout">Cerrar sesión</button>'
+        : '<button type="button" class="link" data-action="nip-cancel">' + (f.recienActivado ? 'Conservar mi NIP actual' : 'Cancelar') + '</button>') + '</div>' +
+    '</div></div>';
+  }
+  function horaCorta(iso){ try{ return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }); }catch(e){ return ""; } }
+  function fechaHora(iso){ var d = new Date(iso); if(isNaN(d)) return ""; return d.getDate() + " " + MESES[d.getMonth()] + ", " + horaCorta(iso); }
+  function nipCardTpl(){
+    var n = (st.data && st.data.nip) || {};
+    var estado = n.bloqueado_hasta ? '<span class="nipState warn">Bloqueado por intentos hasta las ' + esc(horaCorta(n.bloqueado_hasta)) + '</span>'
+      : n.tiene ? '<span class="nipState ok">Activo · ' + (n.origen === "portal" ? 'lo elegiste tú' : 'asignado por el almacén') + '</span>'
+      : '<span class="nipState warn">Pendiente</span>';
+    var espera = n.puede_cambiar_desde && new Date(n.puede_cambiar_desde) > new Date();
+    var btn = !n.tiene ? '<button type="button" class="btnGhost nipBtn" data-action="open-nip">Crear NIP</button>'
+      : espera ? '<button type="button" class="btnGhost nipBtn" disabled title="Solo un cambio cada 24 horas">Disponible el ' + esc(fechaHora(n.puede_cambiar_desde)) + '</button>'
+      : '<button type="button" class="btnGhost nipBtn" data-action="open-nip">Cambiar NIP</button>';
+    return '<section class="nipCard" aria-label="Tu NIP"><span class="nipIco">' + icon("pad") + '</span>' +
+      '<div class="nipInfo"><b>Tu NIP de almacén</b>' + estado + '</div>' + btn + '</section>';
+  }
+
   // La entrada animada de cada pantalla corre una sola vez (no al mostrar un error).
   var animated = {};
   function cardCls(view, first){ if(animated[view]) return " calm"; animated[view] = true; return first || ""; }
@@ -312,7 +368,7 @@
     }
     var foot = '<p class="pFoot">Esta es una consulta personal: nadie más ve esta información desde aquí. Si algo no coincide con lo que tienes, avisa en el almacén.' +
       (p.ultimo_acceso ? '<br/>Último ingreso anterior: ' + fmt(p.ultimo_acceso) + '.' : '') + '</p>';
-    return '<div class="portal">' + top + '<main class="wrap">' + badge + summary + seg + body + foot + '</main></div>';
+    return '<div class="portal">' + top + '<main class="wrap">' + badge + nipCardTpl() + summary + seg + body + foot + '</main></div>';
   }
 
   function pwModalTpl(){
@@ -335,7 +391,7 @@
   // ---------- Render ----------
   function render(){
     var keep = captureInputs();
-    var html = st.view === "activar" ? activarTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() : loginTpl();
+    var html = st.view === "activar" ? activarTpl() : st.view === "nip" ? nipTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() : loginTpl();
     if(st.toast) html += '<div class="toast ' + (st.toast.type === "err" ? "err" : "") + '" role="status"><span class="tIcon">' + icon(st.toast.type === "err" ? "alert" : "check") + '</span>' + esc(st.toast.msg) + '</div>';
     app.innerHTML = html;
     restoreInputs(keep);
@@ -451,7 +507,7 @@
         render(); return;
       }
       clearInterval(actTimer); st.actToken = null;
-      saveToken(r.token);
+      saveToken(r.token); st.recienActivado = true;
       showWelcome(function(){ enterPortal(); });
     }, function(e){ st.pending = false; st.error = e.message; render(); });
   }
@@ -459,7 +515,7 @@
     var w = document.createElement("div");
     w.className = "welcome";
     w.innerHTML = '<span class="welcomeCheck"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>' +
-      '<b>¡Listo!</b><span>Tu contraseña quedó guardada. A partir de hoy entra con ella; tu número de empleado ya no funciona como contraseña.</span>';
+      '<b>Contraseña guardada</b><span>A partir de hoy entra con ella; tu número de empleado ya no funciona como contraseña. Falta un paso: tu NIP.</span>';
     document.body.appendChild(w);
     done();
     setTimeout(function(){ w.classList.add("out"); setTimeout(function(){ if(w.parentNode) w.parentNode.removeChild(w); }, 450); }, reduceMotion() ? 900 : 2300);
@@ -475,22 +531,94 @@
     call("colab_mis_resguardos", { p_token: st.token }).then(function(r){
       st.loading = false;
       if(!r.ok){ sessionEnded(r.mensaje); return; }
-      st.data = r; st.error = ""; lastLoad = Date.now(); render();
+      st.data = r; st.error = ""; lastLoad = Date.now();
+      var n = r.nip || {};
+      if(st.view === "portal" && !silent){
+        if(!n.tiene){ openNip("crear", true); return; }                    // sin NIP: se pide antes de entrar
+        if(st.recienActivado){ st.recienActivado = false; openNip("cambiar", false, true); return; }
+      }
+      render();
     }, function(e){
       st.loading = false;
       if(silent && st.data){ return; }
       st.error = e.message; render();
     });
   }
+  function openNip(modo, obligatorio, recienActivado){
+    st.nip = { modo: modo, pasos: modo === "crear" ? ["nuevo", "confirmar"] : ["actual", "nuevo", "confirmar"], paso: 0,
+               digitos: "", valores: {}, error: "", err: false, pending: false, obligatorio: !!obligatorio, recienActivado: !!recienActivado, listo: false };
+    delete animated.nip;
+    st.view = "nip"; render();
+  }
+  function nipRegla(n){
+    if(/^(\d)\1{3}$/.test(n)) return "Evita números repetidos como 1111 o 0000.";
+    if("0123456789".indexOf(n) >= 0 || "9876543210".indexOf(n) >= 0) return "Evita números seguidos como 1234; son los primeros que alguien intentaría.";
+    var num = st.data && st.data.perfil ? String(st.data.perfil.numero_empleado || "") : "";
+    if(num && n === num.slice(-4)) return "Tu NIP no puede ser tu número de empleado.";
+    return "";
+  }
+  function nipDots(){
+    var f = st.nip, box = document.getElementById("nip-dots"); if(!box) return;
+    Array.prototype.forEach.call(box.children, function(d, i){
+      var was = d.classList.contains("filled"), now = i < f.digitos.length;
+      d.classList.toggle("filled", now); d.classList.remove("err");
+      if(now && !was && !reduceMotion()){ d.classList.remove("pop"); void d.offsetWidth; d.classList.add("pop"); }
+    });
+    box.setAttribute("aria-label", f.digitos.length + " de 4 números");
+  }
+  function nipShake(msg, volverA){
+    var f = st.nip; f.error = msg; f.err = true; f.digitos = "";
+    if(volverA != null){ f.paso = volverA; }
+    render();
+    var box = document.getElementById("nip-dots");
+    if(box && !reduceMotion()){ box.classList.remove("shake"); void box.offsetWidth; box.classList.add("shake"); }
+    if(navigator.vibrate){ try{ navigator.vibrate(120); }catch(e){} }
+  }
+  function nipPress(k){
+    var f = st.nip; if(!f || f.pending || f.listo || f.digitos.length >= 4) return;
+    if(f.err){ f.err = false; }
+    f.digitos += k; nipDots();
+    if(f.digitos.length < 4) return;
+    var paso = f.pasos[f.paso], v = f.digitos;
+    setTimeout(function(){
+      if(st.nip !== f) return;
+      if(paso === "nuevo"){
+        var r = nipRegla(v); if(r){ nipShake(r); return; }
+        if(f.valores.actual && v === f.valores.actual){ nipShake("El NIP nuevo debe ser distinto del actual."); return; }
+      }
+      if(paso === "confirmar" && v !== f.valores.nuevo){ nipShake("Los NIP no coinciden. Escribe el nuevo otra vez.", f.pasos.indexOf("nuevo")); return; }
+      f.valores[paso] = v; f.digitos = ""; f.error = "";
+      if(f.paso < f.pasos.length - 1){ f.paso++; render(); return; }
+      nipSubmit();
+    }, 160);
+  }
+  function nipDel(){ var f = st.nip; if(!f || f.pending || !f.digitos) return; f.digitos = f.digitos.slice(0, -1); nipDots(); }
+  function nipSubmit(){
+    var f = st.nip; f.pending = true; render();
+    call("colab_establecer_nip", { p_token: st.token, p_nip_actual: f.valores.actual || null, p_nip_nuevo: f.valores.nuevo }).then(function(r){
+      if(st.nip !== f) return;
+      f.pending = false;
+      if(!r.ok){
+        if(r.error === "sesion"){ st.nip = null; sessionEnded(r.mensaje); return; }
+        if(r.error === "espera" || r.error === "nip_bloqueado"){ st.nip = null; st.view = "portal"; toast("err", r.mensaje); load(true); return; }
+        f.valores = {};
+        nipShake(r.mensaje, r.error === "nip_actual" ? 0 : f.pasos.indexOf("nuevo"));
+        return;
+      }
+      f.listo = true; render();
+      setTimeout(function(){ if(st.nip !== f) return; st.nip = null; st.view = "portal"; render(); load(true); }, reduceMotion() ? 900 : 2200);
+    }, function(e){ if(st.nip !== f) return; f.pending = false; f.valores = {}; nipShake(e.message, 0); });
+  }
+
   function sessionEnded(msg){
-    saveToken(null); st.data = null; st.pwModal = null; animated = {}; st.view = "login"; st.error = ""; st.info = msg || "Tu sesión terminó. Vuelve a iniciar sesión.";
+    saveToken(null); st.data = null; st.pwModal = null; st.nip = null; animated = {}; st.view = "login"; st.error = ""; st.info = msg || "Tu sesión terminó. Vuelve a iniciar sesión.";
     render();
   }
   function logout(){
     var t = st.token;
     saveToken(null);
     if(t) call("colab_logout", { p_token: t }).catch(function(){});
-    st.data = null; st.pwModal = null; animated = {}; st.view = "login"; st.error = ""; st.info = "Cerraste sesión."; st.numero = "";
+    st.data = null; st.pwModal = null; st.nip = null; st.recienActivado = false; animated = {}; st.view = "login"; st.error = ""; st.info = "Cerraste sesión."; st.numero = "";
     render();
   }
 
@@ -540,6 +668,10 @@
       if(t !== st.tab){ st.tab = t; render(); var l = document.getElementById("list"); if(l && !reduceMotion()) l.classList.add("enter"); }
       return;
     }
+    if(a === "pin"){ nipPress(el.getAttribute("data-k")); return; }
+    if(a === "pin-del"){ nipDel(); return; }
+    if(a === "open-nip"){ openNip(st.data && st.data.nip && st.data.nip.tiene ? "cambiar" : "crear", false); return; }
+    if(a === "nip-cancel"){ st.nip = null; st.view = "portal"; render(); return; }
     if(a === "logout") logout();
     else if(a === "open-pw"){ st.pwModal = { error: "", pending: false }; render(); var n = document.getElementById("pw-nombre"); if(n) n.focus(); }
     else if(a === "close-pw"){ st.pwModal = null; render(); }
@@ -549,10 +681,14 @@
   document.addEventListener("keydown", function(e){
     touch();
     if(e.key === "Escape" && st.pwModal && !st.pwModal.pending){ st.pwModal = null; render(); }
+    if(st.view === "nip" && st.nip){
+      if(/^[0-9]$/.test(e.key)){ e.preventDefault(); nipPress(e.key); }
+      else if(e.key === "Backspace"){ e.preventDefault(); nipDel(); }
+    }
   });
   // Onda al presionar el botón principal
   document.addEventListener("pointerdown", function(e){
-    var b = e.target.closest ? e.target.closest(".btnPrimary") : null;
+    var b = e.target.closest ? e.target.closest(".btnPrimary,.pinKey") : null;
     if(!b || b.disabled || reduceMotion()) return;
     var rc = b.getBoundingClientRect(), s = Math.max(rc.width, rc.height) * 2.2, sp = document.createElement("span");
     sp.className = "ripple"; sp.style.width = sp.style.height = s + "px";
@@ -564,7 +700,7 @@
   var lastActivity = Date.now(), lastLoad = 0;
   function touch(){ lastActivity = Date.now(); }
   setInterval(function(){
-    if(st.view === "portal" && st.token && Date.now() - lastActivity > IDLE_MIN * 60000){
+    if((st.view === "portal" || st.view === "nip") && st.token && Date.now() - lastActivity > IDLE_MIN * 60000){
       logout(); st.info = "Se cerró la sesión por inactividad."; render();
     }
   }, 20000);

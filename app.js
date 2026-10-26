@@ -784,7 +784,7 @@
         html += '<div class="empCard"><div class="avatar avatarLg '+avatarColorClass(emp.nombre)+'">'+esc(initials(emp.nombre))+'</div>' +
           '<div style="min-width:0;flex:1;"><div class="name">'+esc(emp.nombre)+'</div>' +
             '<div class="area">'+(emp.numero ? '<span class="code">#'+esc(emp.numero)+'</span>' : 'Sin número de empleado')+(emp.area ? ' · '+esc(emp.area) : '')+'</div>' +
-            (emp.nipPendiente ? '<div class="area">NIP pendiente · asígnalo con el botón NIP</div>' : '') +
+            (emp.nipPendiente ? '<div class="area">NIP pendiente · lo crea en su portal o asígnalo con el botón NIP</div>' : '') +
             portalLine(emp) + '</div>' +
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
           (portalEstado[emp.id] ? '<button type="button" class="link" data-action="reset-portal" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Restablecer el acceso al portal del colaborador">Portal</button>' : '') +
@@ -934,7 +934,7 @@
       "delete-employee": "Dar de baja a un colaborador requiere correo y contraseña de un supervisor o administrador. Su historial se conserva.",
       "cambiar-nip": "Asigna un NIP nuevo y desbloquea al colaborador si estaba bloqueado por intentos fallidos. Requiere correo y contraseña de un supervisor o administrador.",
       "admin-user": "Confirma con tu correo y contraseña de administrador.",
-      "reset-portal": "Úsalo si el colaborador olvidó su contraseña o quedó bloqueado. Su contraseña vuelve a ser su número de empleado, por una sola vez, y deberá crear una nueva al entrar. Requiere correo y contraseña de un supervisor o administrador."
+      "reset-portal": "Úsalo si el colaborador olvidó su contraseña o quedó bloqueado. Su contraseña vuelve a ser su número de empleado, por una sola vez, y deberá crear una nueva al entrar. Si su NIP lo creó él desde el portal, también se anula y deberá crear otro. Requiere correo y contraseña de un supervisor o administrador."
     };
     return '' +
     '<div class="overlay'+overlayEnter+'"><div class="modal" style="max-width:340px;">' +
@@ -1454,7 +1454,8 @@
       toast("ok","NIP actualizado y desbloqueado.");
     } else if(f.kind === "reset-portal"){
       delete portalEstado[f.payload.employeeId];
-      toast("ok","Acceso al portal restablecido. Su contraseña vuelve a ser su número de empleado.");
+      if(result.nip_anulado){ var e3 = empName(f.payload.employeeId); if(e3) e3.nipPendiente = true; }
+      toast("ok", result.nip_anulado ? "Portal restablecido y NIP anulado. Creará ambos al volver a entrar." : "Acceso al portal restablecido. Su contraseña vuelve a ser su número de empleado.");
     } else if(f.kind === "admin-user"){
       if(!okId(result)){ ui.authFlow = null; render(); return; }
       var u = mapUser(result);
