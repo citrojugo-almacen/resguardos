@@ -1,0 +1,24 @@
+# No se publican en el repo público (GitHub Pages)
+tools/
+tests/
+datos/
+datos_prueba/
+capturas/
+docs/
+*.xlsx
+*.xls
+*.csv
+*.json
+!package.json
+respaldo-*.json
+carga_colaboradores*.sql
+reporte-*.txt
+node_modules/
+.env
+.DS_Store
+# Documentos de trabajo para agentes (contienen datos internos; se quedan en la carpeta local)
+ESTADO_DEL_PROYECTO.md
+GEMINI.md
+AGENTS.md
+LEEME_PRIMERO.md
+.agent/
