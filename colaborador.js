@@ -36,7 +36,14 @@
     equipoQuery: "",
     equipoFiltro: "todos",     // todos | con_herramienta | pendientes
     expandedSubId: null,
-    auditModal: null           // { resguardoId, herramienta, colaborador, resultado: "bueno", nota: "", pending: false, error: "" }
+    auditModal: null,          // { resguardoId, herramienta, colaborador, resultado: "bueno", nota: "", pending: false, error: "" }
+    vistaModo: "personal",     // personal | global (solo directores)
+    globalData: null,
+    globalLoading: false,
+    globalQuery: "",
+    addColabNumero: "",
+    addColabPending: false,
+    addColabError: ""
   };
 
   // ---------- Utilidades ----------
@@ -96,7 +103,9 @@
       chevron:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
       users:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
       clipboard:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>',
-      star:'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
+      star:'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+      plus:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+      trash:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
     };
     return I[n] || "";
   }
@@ -399,6 +408,144 @@
     return '<div class="portal">' + top + '<main class="wrap">' + badge + nipCardTpl() + summary + seg + body + foot + '</main></div>';
   }
 
+  function loadGlobal(){
+    if(!st.token) return;
+    st.globalLoading = true; render();
+    call("colab_resguardos_globales", { p_token: st.token }).then(function(r){
+      st.globalLoading = false;
+      if(r && r.ok){
+        st.globalData = r;
+      } else {
+        st.globalData = null;
+        if(r && r.mensaje) toast("err", r.mensaje);
+      }
+      render();
+    }, function(e){
+      st.globalLoading = false;
+      st.globalData = null;
+      toast("err", e.message);
+      render();
+    });
+  }
+
+  function submitAddColab(){
+    var inp = document.getElementById("in-add-colab-num");
+    var num = inp ? inp.value.trim() : "";
+    st.addColabError = "";
+    if(!num){ st.addColabError = "Escribe el número de empleado."; render(); return; }
+    st.addColabPending = true; render();
+    call("colab_agregar_subordinado", { p_token: st.token, p_numero_empleado: num }).then(function(r){
+      st.addColabPending = false;
+      if(!r.ok){
+        st.addColabError = r.mensaje || "No se pudo agregar al colaborador.";
+        render();
+        return;
+      }
+      st.addColabNumero = "";
+      st.addColabError = "";
+      toast("ok", r.mensaje);
+      loadEquipo(true);
+    }, function(e){
+      st.addColabPending = false;
+      st.addColabError = e.message;
+      render();
+    });
+  }
+
+  function removeSub(id, name){
+    if(!confirm("¿Quitar a " + (name || "este colaborador") + " de tu lista de personal?")) return;
+    call("colab_remover_subordinado", { p_token: st.token, p_subordinado_id: id }).then(function(r){
+      if(!r.ok){
+        toast("err", r.mensaje || "No se pudo quitar de la lista.");
+        return;
+      }
+      toast("ok", "Colaborador removido de tu lista.");
+      loadEquipo(true);
+    }, function(e){
+      toast("err", e.message);
+    });
+  }
+
+  function globalTpl(){
+    if(st.globalLoading){
+      return '<div class="loadingBox"><span class="spin"></span> Cargando todos los resguardos de la empresa...</div>';
+    }
+    if(!st.globalData || !st.globalData.ok){
+      return '<div class="empty"><span class="emptyIco">' + icon("shield") + '</span><b>Consulta Global</b><p class="hint">No se pudieron cargar los resguardos globales.</p><button type="button" class="btnGhost" data-action="reload-global" style="margin-top:12px;width:auto;">Reintentar</button></div>';
+    }
+    var gd = st.globalData;
+    var res = gd.resumen || {};
+    var all = gd.resguardos || [];
+
+    var q = String(st.globalQuery || "").trim().toLowerCase();
+    var filtered = all.filter(function(r){
+      if(!q) return true;
+      var cNombre = String(r.colaborador || "").toLowerCase();
+      var cNum = String(r.numero_empleado || "").toLowerCase();
+      var cArea = String(r.area || "").toLowerCase();
+      var cPuesto = String(r.puesto || "").toLowerCase();
+      var rTool = String(r.herramienta || "").toLowerCase();
+      var rOcc = String(r.occ || "").toLowerCase();
+      var rId = String(r.id_articulo || "").toLowerCase();
+      return cNombre.indexOf(q) >= 0 || cNum.indexOf(q) >= 0 || cArea.indexOf(q) >= 0 || cPuesto.indexOf(q) >= 0 || rTool.indexOf(q) >= 0 || rOcc.indexOf(q) >= 0 || rId.indexOf(q) >= 0;
+    });
+
+    var html = '<div class="globalWrap">' +
+      '<div class="leaderHead">' +
+        '<div class="leaderTitle">' + icon("shield") + ' Resguardos Globales de la Empresa</div>' +
+        '<span class="badgeLevel lvl-dg">' + icon("star") + ' Modo Dirección · Solo Consulta</span>' +
+      '</div>' +
+      '<p class="hint" style="margin:0 0 14px;">Consulta ejecutiva completa de todas las herramientas bajo resguardo activo en Citrojugo. Información de solo lectura sin alteración de datos.</p>' +
+      '<div class="summary" style="margin:0 0 16px;">' +
+        '<div class="sumItem s-on"><div class="sumLabel">Resguardos activos</div><div class="sumValue">' + res.total_resguardos_activos + '</div><div class="sumSub">' + res.total_piezas + ' piezas</div></div>' +
+        '<div class="sumItem"><div class="sumLabel">Colaboradores</div><div class="sumValue">' + res.colaboradores_con_herramienta + '</div><div class="sumSub">con herramienta</div></div>' +
+        '<div class="sumItem"><div class="sumLabel">Capital en campo</div><div class="sumValue" style="font-size:24px;">' + (res.capital_total != null ? fmtMoney(res.capital_total) : '—') + '</div><div class="sumSub">Valuación patrimonial</div></div>' +
+      '</div>' +
+      '<div class="field" style="margin-bottom:12px;">' +
+        '<input type="text" id="in-search-global" placeholder="Buscar colaborador, número, puesto, área, herramienta u OCC..." value="' + esc(st.globalQuery) + '"/>' +
+      '</div>' +
+      '<p class="hint" style="margin:0 0 8px;">Mostrando ' + filtered.length + ' de ' + all.length + ' resguardos activos</p>' +
+      '<div class="globalTableScroll">' +
+        '<table class="globalTable">' +
+          '<thead><tr>' +
+            '<th>Colaborador</th>' +
+            '<th>Herramienta</th>' +
+            '<th style="text-align:right;">Cant.</th>' +
+            '<th>Condición</th>' +
+            '<th style="text-align:right;">Costo unit.</th>' +
+            '<th style="text-align:right;">Total</th>' +
+            '<th>Entrega</th>' +
+            '<th>OCC / ID</th>' +
+            '<th>Última revisión</th>' +
+          '</tr></thead>' +
+          '<tbody>' +
+            (filtered.length === 0 ? '<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--label3);">Sin coincidencias de búsqueda.</td></tr>' :
+             filtered.map(function(r){
+               var condLabel = COND[r.condicion] || r.condicion || '—';
+               var audLabel = !r.revision_en ? '<span class="auditState pendiente">Sin auditar</span>' :
+                 (r.revision_resultado === 'bueno' ? '<span class="auditState bueno">Bueno</span>' :
+                  r.revision_resultado === 'danado' ? '<span class="auditState danado">Dañado</span>' :
+                  r.revision_resultado === 'no_localizado' ? '<span class="auditState no_localizado">No localizado</span>' : '<span class="auditState pendiente">Auditado</span>');
+               return '<tr>' +
+                 '<td><b>' + esc(titleCase(r.colaborador)) + '</b> <span class="numEmpCode">#' + esc(r.numero_empleado) + '</span><div style="font-size:12px;color:var(--label3);">' + esc(sentenceCase(r.puesto)) + (r.area ? ' · ' + esc(titleCase(r.area)) : '') + '</div></td>' +
+                 '<td><b>' + esc(r.herramienta) + '</b></td>' +
+                 '<td style="text-align:right;font-weight:700;">' + r.cantidad + '</td>' +
+                 '<td>' + esc(condLabel) + '</td>' +
+                 '<td style="text-align:right;font-family:var(--mono);">' + (r.costo_unitario != null ? fmtMoney(r.costo_unitario) : '—') + '</td>' +
+                 '<td style="text-align:right;" class="moneyVal">' + (r.costo_total != null ? fmtMoney(r.costo_total) : '—') + '</td>' +
+                 '<td style="font-size:12.5px;white-space:nowrap;">' + fmt(r.fecha_prestamo) + '</td>' +
+                 '<td style="font-size:12px;font-family:var(--mono);">' + (r.occ ? 'OCC ' + esc(r.occ) : (r.id_articulo ? 'ID ' + esc(r.id_articulo) : '—')) + '</td>' +
+                 '<td>' + audLabel + (r.revision_en ? '<div style="font-size:11.5px;color:var(--label3);">' + fmt(r.revision_en) + '</div>' : '') + '</td>' +
+               '</tr>';
+             }).join("")) +
+          '</tbody>' +
+        '</table>' +
+      '</div>' +
+    '</div>';
+
+    return html;
+  }
+
   function equipoTpl(){
     if(!st.equipoData || !st.equipoData.ok) return '';
     var eq = st.equipoData;
@@ -413,6 +560,25 @@
       supervisor: { label: "Supervisor / Coordinador", cls: "lvl-sup", ico: "users" }
     };
     var lInfo = lvlMap[lider.nivel] || { label: "Líder de Área", cls: "lvl-sup", ico: "users" };
+    var esDir = !!(lider.es_director || lider.nivel === "director_general" || lider.nivel === "director");
+
+    var html = '';
+
+    // Conmutador ejecutivo para Directores y Director General
+    if(esDir){
+      html += '<div class="execToggle">' +
+        '<button type="button" class="execToggleBtn' + (st.vistaModo === "personal" ? ' on' : '') + '" data-action="toggle-vista-modo" data-modo="personal">' +
+          icon("users") + ' Mi personal (' + list.length + ')' +
+        '</button>' +
+        '<button type="button" class="execToggleBtn' + (st.vistaModo === "global" ? ' on' : '') + '" data-action="toggle-vista-modo" data-modo="global">' +
+          icon("shield") + ' Toda la empresa (Consulta)' +
+        '</button>' +
+      '</div>';
+
+      if(st.vistaModo === "global"){
+        return html + globalTpl();
+      }
+    }
 
     var q = String(st.equipoQuery || "").trim().toLowerCase();
     var filtro = st.equipoFiltro || "todos";
@@ -431,12 +597,12 @@
     var conHerrCount = list.filter(function(s){ return (s.herramientas_activas || 0) > 0; }).length;
     var pendCount = list.filter(function(s){ return (s.pendientes_revision || 0) > 0; }).length;
 
-    var html = '<div class="leaderBanner">' +
+    html += '<div class="leaderBanner">' +
       '<div class="leaderHead">' +
         '<div class="leaderTitle">' + icon("users") + ' Personal a tu cargo</div>' +
         '<span class="badgeLevel ' + lInfo.cls + '">' + icon(lInfo.ico) + ' ' + esc(lInfo.label) + '</span>' +
       '</div>' +
-      '<p class="hint" style="margin:0 0 14px;">Supervisa el inventario de herramientas de tu equipo y realiza auditorías de campo para verificar su existencia y estado físico.</p>' +
+      '<p class="hint" style="margin:0 0 14px;">Supervisa el inventario de herramientas de tu equipo asignado y audita físicamente su existencia en campo.</p>' +
       '<div class="summary" style="margin:0;">' +
         '<div class="sumItem s-on"><div class="sumLabel">Colaboradores</div><div class="sumValue">' + res.total_colaboradores + '</div><div class="sumSub">' + res.con_herramienta + ' con resguardo</div></div>' +
         '<div class="sumItem"><div class="sumLabel">Herramientas</div><div class="sumValue">' + res.total_herramientas + '</div><div class="sumSub">piezas activas</div></div>' +
@@ -445,12 +611,32 @@
 
     if(lider.puede_ver_costos && res.capital_total != null){
       html += '<div class="capitalCard">' +
-        '<div><div class="capitalLabel">Capital total en resguardo</div><div class="capitalVal">' + fmtMoney(res.capital_total) + '</div><div class="capitalSub">Valuación monetaria oficial del inventario bajo tu dirección</div></div>' +
+        '<div><div class="capitalLabel">Capital en resguardo de tu equipo</div><div class="capitalVal">' + fmtMoney(res.capital_total) + '</div><div class="capitalSub">Valuación patrimonial oficial de tu personal asignado</div></div>' +
         icon("shield") +
       '</div>';
     }
 
     html += '</div>';
+
+    // Recuadro para agregar colaborador por número de empleado
+    html += '<div class="addColabCard">' +
+      '<div class="addColabTitle">' + icon("plus") + ' Asignar colaborador a mi equipo</div>' +
+      '<p class="hint">Escribe el número de empleado para sumarlo a tu supervisión.</p>' +
+      '<form id="f-add-colab" class="addColabForm">' +
+        '<input type="text" id="in-add-colab-num" class="num" inputmode="numeric" placeholder="Ej. 3538 o 0225" maxlength="30" value="' + esc(st.addColabNumero) + '"' + (st.addColabPending ? ' disabled' : '') + '/>' +
+        '<button type="submit" class="btnPrimary btnAddColab"' + (st.addColabPending ? ' disabled' : '') + '>' + (st.addColabPending ? 'Agregando...' : '+ Asignar') + '</button>' +
+      '</form>' +
+      (st.addColabError ? '<p class="errorText" style="margin:10px 0 0;">' + icon("alert") + '<span>' + esc(st.addColabError) + '</span></p>' : '') +
+    '</div>';
+
+    if(list.length === 0){
+      html += '<div class="empty">' +
+        '<span class="emptyIco">' + icon("users") + '</span>' +
+        '<b>No tienes colaboradores asignados aún</b>' +
+        '<p class="hint">Escribe el número de empleado de tu personal en el formulario superior para comenzar a supervisar sus herramientas.</p>' +
+      '</div>';
+      return html;
+    }
 
     html += '<div class="equipoFilterWrap">' +
       '<input type="text" id="in-search-equipo" placeholder="Buscar por colaborador, puesto o área..." value="' + esc(st.equipoQuery) + '"/>' +
@@ -476,7 +662,12 @@
       html += '<article class="subCard' + (isExpanded ? ' expanded' : '') + '" style="--i:' + idx + '">' +
         '<div class="subCardHead" data-action="toggle-sub" data-id="' + sub.id + '">' +
           '<div class="subCardInfo">' +
-            '<div class="subName">' + esc(titleCase(sub.nombre)) + '</div>' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
+              '<div class="subName">' + esc(titleCase(sub.nombre)) + '</div>' +
+              '<button type="button" class="removeBtn" data-action="remove-sub" data-id="' + sub.id + '" data-name="' + esc(sub.nombre) + '" title="Quitar de mi lista">' +
+                icon("trash") + ' Quitar' +
+              '</button>' +
+            '</div>' +
             '<div class="subMeta">' + (sub.numero_empleado ? '#' + esc(sub.numero_empleado) + ' · ' : '') + esc(sentenceCase(sub.puesto) || "Operativo") + (sub.area ? ' · ' + esc(titleCase(sub.area)) : '') + '</div>' +
             '<div class="subPills">' +
               '<span class="subPill' + (activeCount > 0 ? ' hasTools' : '') + '">' + icon("wrench") + ' ' + activeCount + (activeCount === 1 ? ' herramienta' : ' herramientas') + '</span>' +
@@ -902,11 +1093,16 @@
     else if(id === "f-activar") submitActivar();
     else if(id === "f-pw") submitPw();
     else if(id === "f-audit") submitAudit();
+    else if(id === "f-add-colab") submitAddColab();
   });
   document.addEventListener("input", function(e){
     if(e.target && e.target.id === "in-new") updateRules();
     else if(e.target && e.target.id === "in-search-equipo"){
       st.equipoQuery = e.target.value;
+      render();
+    }
+    else if(e.target && e.target.id === "in-search-global"){
+      st.globalQuery = e.target.value;
       render();
     }
     touch();
@@ -918,6 +1114,28 @@
     var a = el.getAttribute("data-action");
     if(a === "pw-backdrop"){ if(e.target === el && !(st.pwModal && st.pwModal.pending)){ st.pwModal = null; render(); } return; }
     if(a === "audit-backdrop"){ if(e.target === el && !(st.auditModal && st.auditModal.pending)){ st.auditModal = null; render(); } return; }
+    if(a === "toggle-vista-modo"){
+      var m = el.getAttribute("data-modo");
+      if(m && m !== st.vistaModo){
+        st.vistaModo = m;
+        if(st.vistaModo === "global" && !st.globalData){
+          loadGlobal();
+        } else {
+          render();
+        }
+      }
+      return;
+    }
+    if(a === "remove-sub"){
+      var subId = el.getAttribute("data-id");
+      var subName = el.getAttribute("data-name");
+      removeSub(subId, subName);
+      return;
+    }
+    if(a === "reload-global"){
+      loadGlobal();
+      return;
+    }
     if(a === "eye"){
       var inp = document.getElementById(el.getAttribute("data-for"));
       if(inp){ var show = inp.type === "password"; inp.type = show ? "text" : "password"; el.innerHTML = icon(show ? "eyeOff" : "eye"); el.setAttribute("aria-label", show ? "Ocultar contraseña" : "Mostrar contraseña"); }
