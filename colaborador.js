@@ -232,7 +232,7 @@
       '</form>' +
       '<div class="firstTime">' + icon("info") + '<span><b>¿Es tu primera vez?</b> Escribe tu número de empleado también como contraseña. Enseguida te pediremos crear la tuya.</span></div>' +
       '<div class="loginFoot"><a class="link" href="index.html">Soy personal de almacén</a></div>' +
-    '</div></div>';
+    '</div><div class="watermark watermarkLight">Grupo de Ingeniería Vicencio</div></div>';
   }
 
   function activarTpl(){
@@ -257,7 +257,7 @@
         '<button type="submit" class="btnPrimary"' + (st.pending ? ' disabled' : '') + '>' + (st.pending ? 'Guardando…' : 'Crear contraseña y entrar') + '</button>' +
       '</form>' +
       '<div class="loginFoot"><button type="button" class="link" data-action="cancel-act">Cancelar</button></div>' +
-    '</div></div>';
+    '</div><div class="watermark watermarkLight">Grupo de Ingeniería Vicencio</div></div>';
   }
   // ---------- NIP ----------
   var PASO_TXT = { actual: "Escribe tu NIP actual", nuevo: "Escribe tu NIP nuevo", confirmar: "Escríbelo otra vez para confirmar" };
@@ -293,7 +293,7 @@
       (f.pending ? '<p class="hint center">Guardando…</p>' : '') +
       '<div class="loginFoot">' + (f.obligatorio ? '<button type="button" class="link" data-action="logout">Cerrar sesión</button>'
         : '<button type="button" class="link" data-action="nip-cancel">' + (f.recienActivado ? 'Conservar mi NIP actual' : 'Cancelar') + '</button>') + '</div>' +
-    '</div></div>';
+    '</div><div class="watermark watermarkLight">Grupo de Ingeniería Vicencio</div></div>';
   }
   function horaCorta(iso){ try{ return new Date(iso).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }); }catch(e){ return ""; } }
   function fechaHora(iso){ var d = new Date(iso); if(isNaN(d)) return ""; return d.getDate() + " " + MESES[d.getMonth()] + ", " + horaCorta(iso); }
@@ -405,7 +405,7 @@
     }
     var foot = '<p class="pFoot">Esta es una consulta personal: nadie más ve esta información desde aquí. Si algo no coincide con lo que tienes, avisa en el almacén.' +
       (p.ultimo_acceso ? '<br/>Último ingreso anterior: ' + fmt(p.ultimo_acceso) + '.' : '') + '</p>';
-    return '<div class="portal">' + top + '<main class="wrap">' + badge + nipCardTpl() + summary + seg + body + foot + '</main></div>';
+    return '<div class="portal">' + top + '<main class="wrap">' + badge + nipCardTpl() + summary + seg + body + foot + '<footer class="watermark">Grupo de Ingeniería Vicencio</footer></main></div>';
   }
 
   function loadGlobal(){

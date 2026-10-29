@@ -799,7 +799,7 @@
       '<div class="userRole">'+esc(ui.currentUser?rolLabel(ui.currentUser):"")+'</div></div>' +
       '<button type="button" class="logoutBtn" data-action="open-password" title="Cambiar contraseña" aria-label="Cambiar contraseña">'+icon("key")+'</button>' +
       '<button type="button" class="logoutBtn" data-action="logout" title="Cerrar sesión" aria-label="Cerrar sesión">'+icon("logout")+'</button>' +
-    '</div></div>';
+    '</div><div class="sidebarWatermark">Grupo de Ingeniería Vicencio</div></div>';
   }
 
   function dashboardTpl(){
@@ -1513,7 +1513,7 @@
       '</form>' +
       '<div class="loginHint"><a class="link colabLink" href="colaborador.html">'+icon("nav_empleados")+' Soy Colaborador Citrojugo</a>' +
         '<p class="hint" style="margin:2px 0 0;">Consulta la herramienta que tienes en resguardo.</p></div>' +
-    '</div></div>';
+    '</div><div class="watermark watermarkLight">Grupo de Ingeniería Vicencio</div></div>';
   }
 
   var ROL_LABEL = { admin: "Administrador", supervisor: "Supervisor", almacen: "Almacén" };
@@ -1794,7 +1794,7 @@
     }
     var html = '<div class="shell'+(ui.sidebarCollapsed?' collapsed':'')+'"><nav class="sidebar" aria-label="Secciones">' + sidebarTpl() + '</nav>' +
       '<button type="button" class="railLogo" data-action="toggle-sidebar" title="Mostrar barra lateral" aria-label="Mostrar barra lateral"><img src="'+LOGO+'" alt="Citrojugo"/></button>' +
-      '<main class="main"><div class="content'+narrow+tabEnter+'">' + pageHeadTpl() + body + '</div></main>' +
+      '<main class="main"><div class="content'+narrow+tabEnter+'">' + pageHeadTpl() + body + '<footer class="watermark">Grupo de Ingeniería Vicencio</footer></div></main>' +
     '</div>' + newEmployeeModalTpl() + liderModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + revisionModalTpl() + printTpl() + enrolarHuellaModalTpl() + toastTpl();
     document.getElementById("app").innerHTML = html;
     if(tabEnter && lastTab !== null) window.scrollTo(0,0);
