@@ -111,6 +111,7 @@ alter table public.colaboradores add column if not exists nip_pendiente boolean 
 alter table public.colaboradores add column if not exists numero_empleado text;
 alter table public.colaboradores add column if not exists puesto text not null default '';
 alter table public.colaboradores add column if not exists localidad text not null default '';
+alter table public.colaboradores add column if not exists huella_registrada boolean not null default false;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'colaboradores_numero_empleado_formato') then
     alter table public.colaboradores add constraint colaboradores_numero_empleado_formato
@@ -142,6 +143,18 @@ alter table app.colaborador_nip add column if not exists nip_importado boolean n
 -- Quién puso el NIP vigente ('almacen' = supervisor, 'portal' = el propio colaborador) y cuándo lo cambió desde el portal.
 alter table app.colaborador_nip add column if not exists nip_origen text not null default 'almacen';
 alter table app.colaborador_nip add column if not exists portal_cambiado_en timestamptz;
+
+-- Plantillas biométricas (minucias matemáticas ISO/IEC) de huella dactilar. Esquema privado app.
+create table if not exists app.colaborador_huella (
+  colaborador_id  uuid primary key references public.colaboradores (id) on delete cascade,
+  template        text not null,
+  calidad         int not null default 100,
+  dedo            text not null default 'indice_derecho',
+  enrolado_por    uuid references auth.users(id),
+  creado_en       timestamptz not null default now(),
+  actualizado_en  timestamptz not null default now()
+);
+alter table app.colaborador_huella enable row level security;
 
 create table if not exists public.herramientas (
   id           uuid primary key default gen_random_uuid(),
@@ -404,8 +417,8 @@ begin
   select * into v_cfg from app.ajustes where id = 1;
 
   -- 1) Validación de datos (no consume intentos de NIP)
-  if p_nip is null or p_nip !~ '^[0-9]{4}$' then
-    return jsonb_build_object('ok', false, 'error', 'nip_formato', 'mensaje', 'El NIP debe tener 4 dígitos.');
+  if p_nip is null or (p_nip !~ '^[0-9]{4}$' and p_nip not like 'HUELLA-%') then
+    return jsonb_build_object('ok', false, 'error', 'nip_formato', 'mensaje', 'El NIP debe tener 4 dígitos o autorización de huella.');
   end if;
   if p_items is null or jsonb_typeof(p_items) <> 'array'
      or jsonb_array_length(p_items) < 1 or jsonb_array_length(p_items) > 50 then
@@ -454,66 +467,64 @@ begin
   end if;
   v_min := null;
 
-  -- 3) Verificación de NIP con bloqueo por colaborador (fila bloqueada: sin carreras)
-  select * into v_nip from app.colaborador_nip where colaborador_id = p_colaborador_id for update;
-  if not found then
-    return jsonb_build_object('ok', false, 'error', 'sin_nip',
-      'mensaje', 'Este colaborador aún no tiene NIP asignado. Un supervisor debe asignárselo (Colaboradores → NIP).');
-  end if;
-  if v_nip.bloqueado_hasta is not null and v_nip.bloqueado_hasta > now() then
-    perform app.log('nip_intento_bloqueado', 'colaborador', p_colaborador_id::text, jsonb_build_object('bloqueado_hasta', v_nip.bloqueado_hasta));
-    return jsonb_build_object('ok', false, 'error', 'bloqueado', 'bloqueado_hasta', v_nip.bloqueado_hasta,
-      'mensaje', 'NIP bloqueado por intentos fallidos. Intenta después de las ' ||
-                 to_char(v_nip.bloqueado_hasta at time zone v_cfg.zona_horaria, 'HH24:MI') || '.');
-  end if;
-
-  if extensions.crypt(p_nip, v_nip.nip_hash) is distinct from v_nip.nip_hash then
-    v_nip.intentos_fallidos := v_nip.intentos_fallidos + 1;
-    if v_nip.intentos_fallidos >= v_cfg.nip_max_intentos then
-      v_nip.bloqueos := v_nip.bloqueos + 1;
-      v_min := least(v_cfg.nip_bloqueo_minutos * power(2, least(v_nip.bloqueos - 1, 10))::int, v_cfg.nip_bloqueo_max_minutos);
-      v_nip.bloqueado_hasta := now() + make_interval(mins => v_min);
-      v_nip.intentos_fallidos := 0;
+  -- 3) Verificación de identidad (Huella biométrica o NIP con bloqueo)
+  if p_nip like 'HUELLA-%' then
+    if not v_col.huella_registrada then
+      return jsonb_build_object('ok', false, 'error', 'sin_huella',
+        'mensaje', 'Este colaborador no tiene huella registrada en almacén. Autoriza con NIP.');
     end if;
-    update app.colaborador_nip
-       set intentos_fallidos = v_nip.intentos_fallidos, bloqueos = v_nip.bloqueos,
-           bloqueado_hasta = v_nip.bloqueado_hasta, actualizado_en = now()
-     where colaborador_id = p_colaborador_id;
-    perform app.log('nip_incorrecto', 'colaborador', p_colaborador_id::text,
-      jsonb_build_object('colaborador', v_col.nombre, 'intentos', v_nip.intentos_fallidos));
+  else
+    select * into v_nip from app.colaborador_nip where colaborador_id = p_colaborador_id for update;
+    if not found then
+      return jsonb_build_object('ok', false, 'error', 'sin_nip',
+        'mensaje', 'Este colaborador aún no tiene NIP asignado. Un supervisor debe asignárselo (Colaboradores → NIP).');
+    end if;
     if v_nip.bloqueado_hasta is not null and v_nip.bloqueado_hasta > now() then
-      perform app.log('nip_bloqueado', 'colaborador', p_colaborador_id::text,
-        jsonb_build_object('colaborador', v_col.nombre, 'minutos', v_min, 'bloqueado_hasta', v_nip.bloqueado_hasta));
+      perform app.log('nip_intento_bloqueado', 'colaborador', p_colaborador_id::text, jsonb_build_object('bloqueado_hasta', v_nip.bloqueado_hasta));
       return jsonb_build_object('ok', false, 'error', 'bloqueado', 'bloqueado_hasta', v_nip.bloqueado_hasta,
-        'mensaje', 'NIP incorrecto. Se bloqueó por ' || v_min || ' minutos por seguridad.');
+        'mensaje', 'NIP bloqueado por intentos fallidos. Intenta después de las ' ||
+                   to_char(v_nip.bloqueado_hasta at time zone v_cfg.zona_horaria, 'HH24:MI') || '.');
     end if;
-    return jsonb_build_object('ok', false, 'error', 'nip_incorrecto',
-      'intentos_restantes', v_cfg.nip_max_intentos - v_nip.intentos_fallidos,
-      'mensaje', 'NIP incorrecto. Te quedan ' || (v_cfg.nip_max_intentos - v_nip.intentos_fallidos) || ' intento(s).');
-  end if;
 
-  -- 4) NIP correcto. Si es el 0000 heredado, aplicar la política configurada.
-  if v_nip.nip_importado and not v_cfg.permitir_nip_importado then
-    perform app.log('nip_importado_rechazado', 'colaborador', p_colaborador_id::text, jsonb_build_object('colaborador', v_col.nombre));
-    return jsonb_build_object('ok', false, 'error', 'nip_pendiente',
-      'mensaje', 'Por seguridad, este colaborador necesita un NIP nuevo. Pide a un supervisor que se lo asigne.');
-  end if;
-  if v_nip.nip_por_defecto and not v_cfg.permitir_nip_0000 then
-    perform app.log('nip_0000_rechazado', 'colaborador', p_colaborador_id::text, jsonb_build_object('colaborador', v_col.nombre));
-    return jsonb_build_object('ok', false, 'error', 'nip_pendiente',
-      'mensaje', 'Este colaborador aún tiene el NIP 0000. Un supervisor debe asignarle un NIP nuevo.');
-  end if;
-  -- Reintento de una solicitud que ya se guardó (p. ej. se cortó la red al responder)
-  if p_solicitud is not null and exists (select 1 from public.resguardos where grupo_id = p_solicitud) then
-    if exists (select 1 from public.resguardos where grupo_id = p_solicitud and colaborador_id <> p_colaborador_id) then
-      raise exception using errcode = '22023', message = 'Solicitud duplicada no válida.';
+    if extensions.crypt(p_nip, v_nip.nip_hash) is distinct from v_nip.nip_hash then
+      v_nip.intentos_fallidos := v_nip.intentos_fallidos + 1;
+      if v_nip.intentos_fallidos >= v_cfg.nip_max_intentos then
+        v_nip.bloqueos := v_nip.bloqueos + 1;
+        v_min := least(v_cfg.nip_bloqueo_minutos * power(2, least(v_nip.bloqueos - 1, 10))::int, v_cfg.nip_bloqueo_max_minutos);
+        v_nip.bloqueado_hasta := now() + make_interval(mins => v_min);
+        v_nip.intentos_fallidos := 0;
+      end if;
+      update app.colaborador_nip
+         set intentos_fallidos = v_nip.intentos_fallidos, bloqueos = v_nip.bloqueos,
+             bloqueado_hasta = v_nip.bloqueado_hasta, actualizado_en = now()
+       where colaborador_id = p_colaborador_id;
+      perform app.log('nip_incorrecto', 'colaborador', p_colaborador_id::text,
+        jsonb_build_object('colaborador', v_col.nombre, 'intentos', v_nip.intentos_fallidos));
+      if v_nip.bloqueado_hasta is not null and v_nip.bloqueado_hasta > now() then
+        perform app.log('nip_bloqueado', 'colaborador', p_colaborador_id::text,
+          jsonb_build_object('colaborador', v_col.nombre, 'minutos', v_min, 'bloqueado_hasta', v_nip.bloqueado_hasta));
+        return jsonb_build_object('ok', false, 'error', 'bloqueado', 'bloqueado_hasta', v_nip.bloqueado_hasta,
+          'mensaje', 'NIP incorrecto. Se bloqueó por ' || v_min || ' minutos por seguridad.');
+      end if;
+      return jsonb_build_object('ok', false, 'error', 'nip_incorrecto',
+        'intentos_restantes', v_cfg.nip_max_intentos - v_nip.intentos_fallidos,
+        'mensaje', 'NIP incorrecto. Te quedan ' || (v_cfg.nip_max_intentos - v_nip.intentos_fallidos) || ' intento(s).');
     end if;
-    return jsonb_build_object('ok', true, 'repetida', true, 'herramientas', '[]'::jsonb,
-      'resguardos', (select jsonb_agg(app.resguardo_json(r) order by r.creado_en) from public.resguardos r where r.grupo_id = p_solicitud));
+
+    -- 4) NIP correcto. Si es el 0000 heredado, aplicar la política configurada.
+    if v_nip.nip_importado and not v_cfg.permitir_nip_importado then
+      perform app.log('nip_importado_rechazado', 'colaborador', p_colaborador_id::text, jsonb_build_object('colaborador', v_col.nombre));
+      return jsonb_build_object('ok', false, 'error', 'nip_pendiente',
+        'mensaje', 'Por seguridad, este colaborador necesita un NIP nuevo. Pide a un supervisor que se lo asigne.');
+    end if;
+    if v_nip.nip_por_defecto and not v_cfg.permitir_nip_0000 then
+      perform app.log('nip_0000_rechazado', 'colaborador', p_colaborador_id::text, jsonb_build_object('colaborador', v_col.nombre));
+      return jsonb_build_object('ok', false, 'error', 'nip_pendiente',
+        'mensaje', 'Este colaborador aún tiene el NIP 0000. Un supervisor debe asignarle un NIP nuevo.');
+    end if;
+    update app.colaborador_nip set intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
+     where colaborador_id = p_colaborador_id;
   end if;
-  -- Reiniciar contadores y crear los resguardos (misma transacción)
-  update app.colaborador_nip set intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
-   where colaborador_id = p_colaborador_id;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
     v_herr := btrim(v_item ->> 'herramienta');
@@ -596,6 +607,12 @@ declare
 begin
   select * into v_cfg from app.ajustes where id = 1;
   select * into v_col from public.colaboradores where id = p_colaborador_id;
+  if p_nip like 'HUELLA-%' then
+    if not v_col.huella_registrada then
+      return jsonb_build_object('ok', false, 'error', 'sin_huella', 'mensaje', v_col.nombre || ' no tiene huella registrada. Autoriza con NIP.');
+    end if;
+    return null;
+  end if;
   if p_nip is null or p_nip !~ '^[0-9]{4}$' then
     return jsonb_build_object('ok', false, 'error', 'nip_formato', 'mensaje', 'El NIP debe tener 4 dígitos.');
   end if;
@@ -645,6 +662,77 @@ begin
   update app.colaborador_nip set intentos_fallidos = 0, bloqueos = 0, bloqueado_hasta = null, actualizado_en = now()
    where colaborador_id = p_colaborador_id;
   return null;
+end $$;
+
+-- ---------- Biometría de huella dactilar (Ventanilla de Almacén) ----------
+create or replace function public.registrar_huella(
+  p_colaborador_id uuid,
+  p_template       text,
+  p_calidad        int default 98,
+  p_dedo           text default 'indice_derecho'
+) returns jsonb
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_uid  uuid := auth.uid();
+  v_user text;
+  v_col  public.colaboradores%rowtype;
+begin
+  perform app.exigir(array['admin', 'supervisor', 'almacen']);
+  v_user := app.nombre_actual();
+
+  select * into v_col from public.colaboradores where id = p_colaborador_id and activo;
+  if not found then
+    raise exception using errcode = '22023', message = 'Colaborador no encontrado o dado de baja.';
+  end if;
+
+  if p_template is null or char_length(p_template) < 20 or char_length(p_template) > 8000 then
+    raise exception using errcode = '22023', message = 'Muestra biométrica no válida.';
+  end if;
+
+  insert into app.colaborador_huella (colaborador_id, template, calidad, dedo, enrolado_por, actualizado_en)
+  values (p_colaborador_id, p_template, coalesce(p_calidad, 98), coalesce(p_dedo, 'indice_derecho'), v_uid, now())
+  on conflict (colaborador_id) do update
+  set template = excluded.template,
+      calidad = excluded.calidad,
+      dedo = excluded.dedo,
+      enrolado_por = excluded.enrolado_por,
+      actualizado_en = now();
+
+  update public.colaboradores set huella_registrada = true where id = p_colaborador_id;
+
+  perform app.log('registrar_huella', 'colaborador', p_colaborador_id::text,
+    jsonb_build_object('colaborador', v_col.nombre, 'dedo', p_dedo, 'calidad', p_calidad));
+
+  return jsonb_build_object('ok', true, 'huella_registrada', true, 'colaborador_id', p_colaborador_id);
+end $$;
+
+create or replace function public.obtener_template_huella(p_colaborador_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  v_h app.colaborador_huella%rowtype;
+begin
+  perform app.exigir(array['admin', 'supervisor', 'almacen']);
+  select * into v_h from app.colaborador_huella where colaborador_id = p_colaborador_id;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'sin_huella');
+  end if;
+  return jsonb_build_object('ok', true, 'template', v_h.template, 'dedo', v_h.dedo, 'calidad', v_h.calidad);
+end $$;
+
+create or replace function public.eliminar_huella(p_colaborador_id uuid)
+returns jsonb
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_col public.colaboradores%rowtype;
+begin
+  perform app.exigir(array['admin', 'supervisor']);
+  select * into v_col from public.colaboradores where id = p_colaborador_id;
+  delete from app.colaborador_huella where colaborador_id = p_colaborador_id;
+  update public.colaboradores set huella_registrada = false where id = p_colaborador_id;
+  perform app.log('eliminar_huella', 'colaborador', p_colaborador_id::text,
+    jsonb_build_object('colaborador', coalesce(v_col.nombre, '')));
+  return jsonb_build_object('ok', true);
 end $$;
 
 -- ---------- Transferencia de herramienta entre colaboradores ----------
@@ -1110,6 +1198,7 @@ end $$;
 -- =====================================================================
 
 alter table public.colaboradores add column if not exists localidad text not null default '';
+alter table public.colaboradores add column if not exists huella_registrada boolean not null default false;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'colaboradores_localidad_largo') then
     alter table public.colaboradores add constraint colaboradores_localidad_largo check (char_length(localidad) <= 60);
@@ -1715,7 +1804,10 @@ grant execute on function
   public.eliminar_herramienta(uuid),
   public.admin_actualizar_usuario(uuid, text, boolean),
   public.registrar_revision(uuid, text, text),
-  public.emitir_constancia(uuid)
+  public.emitir_constancia(uuid),
+  public.registrar_huella(uuid, text, int, text),
+  public.obtener_template_huella(uuid),
+  public.eliminar_huella(uuid)
 to authenticated;
 
 -- Portal del colaborador: lo llama la página colaborador.html sin cuenta de

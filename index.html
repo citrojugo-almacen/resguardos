@@ -6,7 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <!-- Seguridad (GitHub Pages no permite cabeceras HTTP; se declara aquí).
      connect-src: solo el proyecto de Supabase de Citrojugo (si cambias de proyecto, actualiza aquí y en colaborador.html). -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src https://svfpdejuhruojytqriji.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'; upgrade-insecure-requests" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src https://svfpdejuhruojytqriji.supabase.co http://127.0.0.1:8765 http://localhost:8765; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'; upgrade-insecure-requests" />
 <meta name="referrer" content="no-referrer" />
 <meta name="robots" content="noindex, nofollow" />
 <style>
@@ -554,6 +554,27 @@
   .recentTitle{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .recentSub{font-size:13px;color:var(--label3);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums;}
   .pinModal .modalHead{margin-bottom:10px;}
+  /* Selector de método Huella / NIP */
+  .authTabWrap{display:flex;background:var(--fill2);border-radius:10px;padding:3px;margin:0 0 16px;gap:4px;}
+  .authTab{flex:1;border:none;background:transparent;padding:8px 12px;font-size:13.5px;font-weight:600;border-radius:8px;color:var(--label2);cursor:pointer;transition:all .15s ease;display:inline-flex;align-items:center;justify-content:center;gap:6px;}
+  .authTab.active{background:var(--bgCard);color:var(--brand);box-shadow:0 1px 3px rgba(0,0,0,0.12);}
+  .authTab:hover:not(.active){color:var(--label);}
+  /* Zona biométrica */
+  .fingerprintZone{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px 12px;text-align:center;}
+  .fingerprintIcon{width:88px;height:88px;border-radius:50%;background:#F2F7F2;border:2px solid var(--brand);display:flex;align-items:center;justify-content:center;color:var(--brand);margin-bottom:14px;transition:all .25s ease;position:relative;}
+  .fingerprintIcon svg{width:48px;height:48px;}
+  .fingerprintIcon.scanning{border-color:var(--brandLime);background:#F4FBF4;color:var(--tint);transform:scale(1.05);box-shadow:0 0 18px rgba(139,197,63,.45);}
+  .fingerprintIcon.success{border-color:var(--tint);background:#E8F5E9;color:#2E7D32;}
+  .fingerprintIcon.error{border-color:var(--danger);background:var(--dangerBg);color:var(--dangerInk);animation:shake .3s ease;}
+  .fingerprintStatus{font-size:15px;font-weight:600;color:var(--label);margin:0 0 6px;}
+  .fingerprintSub{font-size:12.5px;color:var(--label2);margin:0 0 12px;}
+  .fingerprintPulse{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:#EAF5DA;color:var(--okInk);}
+  .fingerprintPulse.offline{background:var(--fill);color:var(--label3);}
+  .fingerprintPulse .pulseDot{width:7px;height:7px;border-radius:50%;background:#8BC53F;box-shadow:0 0 0 2px rgba(139,197,63,.3);}
+  .fingerprintPulse.offline .pulseDot{background:#8E8E93;box-shadow:none;}
+  /* Insignias biométricas en colaboradores */
+  .badgeBio{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;font-size:11.5px;font-weight:600;background:#EAF5DA;color:var(--okInk);}
+  .badgeBio.none{background:var(--fill);color:var(--label3);}
   .confirmBox{background:var(--dangerBg);border:1px solid var(--dangerLine);border-radius:var(--r-sm);padding:14px 16px;}
   .listGroup .confirmBox{border-radius:0;border-width:0 0 1px 0;}
   .confirmBox p{font-size:14px;color:var(--dangerInk);margin:0 0 12px;line-height:1.45;}

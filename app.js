@@ -40,7 +40,8 @@
     pageSize: 40,
     visible: { activos: 40, historial: 40, catalogo: 40, empleados: 40, tabla: 40, constancias: 40 },
     justStamped: [],
-    revFlow: null, audOpen: {}, print: null, cnQuery: "", cnEmpId: ""
+    revFlow: null, audOpen: {}, print: null, cnQuery: "", cnEmpId: "",
+    biometricAvailable: false, biometricDevice: "", enrolarFlow: null
   };
 
   function paginate(list, key){
@@ -259,7 +260,7 @@
   var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   function okId(row){ return row && UUID_RE.test(String(row.id)); }
   function isoDate(v){ return (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : ""; }
-  function mapEmployee(c){ return { id: String(c.id), numero: String(c.numero_empleado || ""), nombre: String(c.nombre || ""), area: String(c.area || ""), puesto: String(c.puesto || ""), activo: c.activo !== false, nipPendiente: !!c.nip_pendiente }; }
+  function mapEmployee(c){ return { id: String(c.id), numero: String(c.numero_empleado || ""), nombre: String(c.nombre || ""), area: String(c.area || ""), puesto: String(c.puesto || ""), activo: c.activo !== false, nipPendiente: !!c.nip_pendiente, huellaRegistrada: !!c.huella_registrada }; }
   function normNum(s){ return String(s || "").replace(/\s+/g, "").toUpperCase(); }
   // "Nombre · #123" para mostrar al colaborador con su número de empleado.
   function reduceMotion(){ try{ return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }catch(e){ return false; } }
@@ -308,7 +309,7 @@
     opts = opts || {};
     if(!opts.silent){ ui.loading = true; ui.loadError = ""; render(); }
     return Promise.all([
-      selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente", "nombre.asc,id.asc"),
+      selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada", "nombre.asc,id.asc"),
       selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc"),
       selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc").catch(function(e){
         if(e.status === 400) return selectAll("resguardos", RES_COLS_BASE, "creado_en.desc,id.desc");   // base sin actualizar
@@ -333,6 +334,7 @@
       }
       lastLoadAt = Date.now();
       ui.loading = false; ui.loadError = ""; ui.offline = false;
+      checkBiometricService();
       render();
     }, function(e){
       ui.loading = false;
@@ -451,6 +453,7 @@
       print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
       nav_auditoria: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v3H9z"/><polyline points="9 13 11 15 15 11"/></svg>',
       nav_constancias: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/></svg>',
+      fingerprint: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M9 6.8a6 6 0 0 1 9 5.2c0 .47 0 1.17-.02 2"/><path d="M4 10.95C4 4.5 9 2 12 2s8 2.5 8 8.95"/><path d="M6 14c.08-1.57.5-3.88 1.5-5.5"/><path d="M12 22a10.6 10.6 0 0 0 6-3"/></svg>',
       alert: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
     };
     return icons[name] || "";
@@ -1099,7 +1102,11 @@
           '<div style="min-width:0;flex:1;"><div class="name">'+esc(emp.nombre)+'</div>' +
             '<div class="area">'+(emp.numero ? '<span class="code">#'+esc(emp.numero)+'</span>' : 'Sin número de empleado')+(emp.area ? ' · '+esc(emp.area) : '')+'</div>' +
             (emp.nipPendiente ? '<div class="area">NIP pendiente · lo crea en su portal o asígnalo con el botón NIP</div>' : '') +
-            portalLine(emp) + '</div>' +
+            portalLine(emp) +
+            '<div style="margin-top:4px;">' +
+              (emp.huellaRegistrada ? '<span class="badgeBio">'+icon("fingerprint")+' Huella activa</span>' : '<span class="badgeBio none">'+icon("fingerprint")+' Sin huella</span>') +
+            '</div></div>' +
+          '<button type="button" class="link" data-action="open-enrolar-huella" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Registrar o actualizar huella dactilar en ventanilla">Huella</button>' +
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
           (portalEstado[emp.id] ? '<button type="button" class="link" data-action="reset-portal" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Restablecer el acceso al portal del colaborador">Portal</button>' : '') +
           (activosEmp>0 ? '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>'
@@ -1184,7 +1191,9 @@
   function pinPadModalTpl(){
     if(!ui.pinFlow) return "";
     var emp = empName(ui.pinFlow.employeeId);
-    var pinLen = ui.pinFlow.pin.length;
+    var method = ui.pinFlow.authMethod || (emp && emp.huellaRegistrada && ui.biometricAvailable ? "huella" : "nip");
+    ui.pinFlow.authMethod = method;
+    var pinLen = ui.pinFlow.pin ? ui.pinFlow.pin.length : 0;
     var dots = "";
     for(var i=0;i<4;i++){
       var cls = "dot" + (i<pinLen?" filled":"") + (ui.pinFlow.error?" err":"") + (i===pinLen-1 && pinLen>renderPrevPinLen ? " pop":"");
@@ -1192,6 +1201,39 @@
     }
     var digits = ["1","2","3","4","5","6","7","8","9"];
     var keys = digits.map(function(d){ return '<button type="button" class="pinKey" data-action="pin-digit" data-digit="'+d+'">'+d+'</button>'; }).join("");
+
+    var tabs = '' +
+      '<div class="authTabWrap">' +
+        '<button type="button" class="authTab'+(method==="huella"?" active":"")+'" data-action="pin-switch-method" data-method="huella">'+icon("fingerprint")+' Huella Dactilar</button>' +
+        '<button type="button" class="authTab'+(method==="nip"?" active":"")+'" data-action="pin-switch-method" data-method="nip">'+icon("lock")+' NIP</button>' +
+      '</div>';
+
+    var bodyContent = "";
+    if(method === "huella"){
+      bodyContent = '' +
+        '<div class="fingerprintZone">' +
+          '<div class="fingerprintIcon'+(ui.pinFlow.scanning ? ' scanning' : (ui.pinFlow.bioSuccess ? ' success' : (ui.pinFlow.error ? ' error' : '')))+'">' +
+            (ui.pinFlow.bioSuccess ? icon("check") : icon("fingerprint")) +
+          '</div>' +
+          '<div class="fingerprintStatus">'+(ui.pinFlow.bioSuccess ? '¡Identidad confirmada!' : (ui.pinFlow.scanning ? 'Verificando huella...' : (ui.pinFlow.error ? esc(ui.pinFlow.errorMsg || 'Huella no reconocida') : 'Coloca tu dedo en el lector USB...')))+'</div>' +
+          '<p class="fingerprintSub">'+(ui.biometricAvailable ? '<span class="fingerprintPulse"><span class="pulseDot"></span> Lector en ventanilla listo</span>' : '<span class="fingerprintPulse offline"><span class="pulseDot"></span> Lector no detectado (usa NIP)</span>')+'</p>' +
+          (ui.biometricAvailable ?
+            '<button type="button" class="btnPrimary" style="min-height:42px;width:100%;margin-top:6px;font-size:14px;" data-action="pin-scan-fingerprint">'+icon("fingerprint")+' Detectar huella ahora</button>' :
+            '<button type="button" class="btnPrimary" style="min-height:42px;width:100%;margin-top:6px;" data-action="pin-switch-method" data-method="nip">Cambiar a NIP</button>'
+          ) +
+        '</div>';
+    } else {
+      bodyContent = '' +
+        '<p class="hint center" style="margin:0;font-size:14px;color:var(--label2);">Ingresa tu NIP de 4 dígitos</p>' +
+        '<div class="pinDots'+(renderShake?' shake':'')+'" role="status" aria-label="'+pinLen+' de 4 dígitos">'+dots+'</div>' +
+        (ui.pinFlow.error ? '<p class="errorText" style="justify-content:center;margin:-8px 0 12px;">'+icon("alert")+' '+esc(ui.pinFlow.errorMsg || "NIP incorrecto, intenta de nuevo")+'</p>' : '') +
+        (ui.pinFlow.pending ? '<p class="hint center" style="margin:-6px 0 10px;">Verificando…</p>' : '') +
+        '<div class="pinGrid">' + keys + '<div></div>' +
+          '<button type="button" class="pinKey" data-action="pin-digit" data-digit="0">0</button>' +
+          '<button type="button" class="pinKey keyDel" data-action="pin-del" aria-label="Borrar">'+icon("del")+'</button>' +
+        '</div>';
+    }
+
     return '' +
     '<div class="overlay'+overlayEnter+'"><div class="modal pinModal" style="max-width:360px;">' +
       '<div class="modalHead"><div style="min-width:0;">' +
@@ -1199,13 +1241,36 @@
         (emp && emp.numero ? '<p class="modalSub code">No. de empleado #'+esc(emp.numero)+'</p>' : '') +
         '<p class="modalSub">'+(ui.pinFlow.mode==="nuevo"?"Autoriza la entrega de "+(ui.cart.length===1?"1 herramienta":ui.cart.length+" herramientas"):"Confirma la devolución")+'</p></div>' +
         '<button type="button" class="closeBtn" data-action="pin-cancel" aria-label="Cancelar">'+icon("x")+'</button></div>' +
-      '<p class="hint center" style="margin:0;font-size:14px;color:var(--label2);">Ingresa tu NIP de 4 dígitos</p>' +
-      '<div class="pinDots'+(renderShake?' shake':'')+'" role="status" aria-label="'+pinLen+' de 4 dígitos">'+dots+'</div>' +
-      (ui.pinFlow.error ? '<p class="errorText" style="justify-content:center;margin:-8px 0 12px;">'+icon("alert")+' '+esc(ui.pinFlow.errorMsg || "NIP incorrecto, intenta de nuevo")+'</p>' : '') +
-      (ui.pinFlow.pending ? '<p class="hint center" style="margin:-6px 0 10px;">Verificando…</p>' : '') +
-      '<div class="pinGrid">' + keys + '<div></div>' +
-        '<button type="button" class="pinKey" data-action="pin-digit" data-digit="0">0</button>' +
-        '<button type="button" class="pinKey keyDel" data-action="pin-del" aria-label="Borrar">'+icon("del")+'</button>' +
+      tabs +
+      bodyContent +
+    '</div></div>';
+  }
+
+  function enrolarHuellaModalTpl(){
+    var flow = ui.enrolarFlow;
+    if(!flow) return "";
+    var emp = empName(flow.empId);
+    if(!emp) return "";
+    return '' +
+    '<div class="overlay'+overlayEnter+'"><div class="modal" style="max-width:390px;">' +
+      '<div class="modalHead"><div style="min-width:0;">' +
+        '<div class="modalTitle">Registro de Huella</div>' +
+        '<p class="modalSub">'+esc(emp.nombre)+' · <span class="code">#'+esc(emp.numero)+'</span></p></div>' +
+        '<button type="button" class="closeBtn" data-action="enrolar-cancel" aria-label="Cancelar">'+icon("x")+'</button></div>' +
+      '<div class="fingerprintZone">' +
+        '<div class="fingerprintIcon'+(flow.scanning ? ' scanning' : (flow.success ? ' success' : (flow.error ? ' error' : '')))+'">' +
+          (flow.success ? icon("check") : icon("fingerprint")) +
+        '</div>' +
+        '<div class="fingerprintStatus">'+(flow.success ? '¡Huella guardada con éxito!' : (flow.step===1 ? 'Paso 1: Coloca el dedo en el lector' : 'Paso 2: Vuelve a colocar el dedo para confirmar'))+'</div>' +
+        '<p class="fingerprintSub">'+(flow.error ? '<span class="errorText">'+icon("alert")+' '+esc(flow.error)+'</span>' : 'Ventanilla física de almacén')+'</p>' +
+        (flow.scanning ? '<p class="hint center">Leyendo sensor USB…</p>' :
+          (!flow.success ?
+            '<button type="button" class="btnPrimary" style="min-height:44px;width:100%;font-size:14px;" data-action="enrolar-capture">' +
+              icon("fingerprint") + (flow.step===1 ? ' Capturar muestra inicial' : ' Confirmar y guardar huella') +
+            '</button>' :
+            '<button type="button" class="btnPrimary" style="min-height:44px;width:100%;" data-action="enrolar-cancel">Cerrar</button>'
+          )
+        ) +
       '</div>' +
     '</div></div>';
   }
@@ -1453,6 +1518,7 @@
     if(ui.viewEmployeeToolsId) return "tools:"+ui.viewEmployeeToolsId;
     if(ui.revFlow) return "rev:"+ui.revFlow.id;
     if(ui.print) return "print";
+    if(ui.enrolarFlow) return "enrolar:" + ui.enrolarFlow.empId;
     return "";
   }
   var pageTitles = {
@@ -1567,7 +1633,7 @@
     var html = '<div class="shell'+(ui.sidebarCollapsed?' collapsed':'')+'"><nav class="sidebar" aria-label="Secciones">' + sidebarTpl() + '</nav>' +
       '<button type="button" class="railLogo" data-action="toggle-sidebar" title="Mostrar barra lateral" aria-label="Mostrar barra lateral"><img src="'+LOGO+'" alt="Citrojugo"/></button>' +
       '<main class="main"><div class="content'+narrow+tabEnter+'">' + pageHeadTpl() + body + '</div></main>' +
-    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + revisionModalTpl() + printTpl() + toastTpl();
+    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + revisionModalTpl() + printTpl() + enrolarHuellaModalTpl() + toastTpl();
     document.getElementById("app").innerHTML = html;
     if(tabEnter && lastTab !== null) window.scrollTo(0,0);
     lastTab = ui.tab; lastModalKey = mk; lastPinLen = ui.pinFlow ? ui.pinFlow.pin.length : 0;
@@ -1994,8 +2060,141 @@
     if(ui.form.fechaPrestamo > todayISO()){ toast("err","La fecha de entrega no puede ser futura."); return; }
     if(ui.form.notas.length > 500){ toast("err","Las notas admiten máximo 500 caracteres."); return; }
     // requestId: mismo valor en reintentos → la base no duplica el resguardo.
-    ui.pinFlow = {mode:"nuevo", employeeId:ui.form.employeeId, resguardoId:null, pin:"", error:false, errorMsg:"", pending:false, requestId:newRequestId()};
+    var emp = empName(ui.form.employeeId);
+    var defaultMethod = (emp && emp.huellaRegistrada && ui.biometricAvailable) ? "huella" : "nip";
+    ui.pinFlow = {mode:"nuevo", employeeId:ui.form.employeeId, resguardoId:null, pin:"", error:false, errorMsg:"", pending:false, requestId:newRequestId(), authMethod:defaultMethod, scanning:false, bioSuccess:false};
     render();
+  }
+
+  // ---------- Servicio Biométrico Local (Lector USB en Ventanilla) ----------
+  var BIOMETRIC_URL = "http://127.0.0.1:8765";
+
+  function checkBiometricService(){
+    try {
+      var ctrl = window.AbortController ? new AbortController() : null;
+      var tid = setTimeout(function(){ if(ctrl) ctrl.abort(); }, 600);
+      fetch(BIOMETRIC_URL + "/status", { method: "GET", signal: ctrl ? ctrl.signal : undefined })
+        .then(function(r){ clearTimeout(tid); return r.json(); })
+        .then(function(data){
+          if(data && data.ok){
+            ui.biometricAvailable = !!data.lector_conectado;
+            ui.biometricDevice = data.dispositivo || "Lector USB";
+            render();
+          }
+        }).catch(function(){
+          ui.biometricAvailable = false;
+        });
+    } catch(e){
+      ui.biometricAvailable = false;
+    }
+  }
+
+  function httpLocalBiometric(method, path, body){
+    var ctrl = window.AbortController ? new AbortController() : null;
+    var tid = setTimeout(function(){ if(ctrl) ctrl.abort(); }, 8000);
+    return fetch(BIOMETRIC_URL + path, {
+      method: method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function(r){
+      clearTimeout(tid);
+      if(!r.ok) throw new Error("Error en servicio biométrico: HTTP " + r.status);
+      return r.json();
+    });
+  }
+
+  function scanBiometricAuth(){
+    var flow = ui.pinFlow;
+    if(!flow || flow.pending || flow.scanning) return;
+    flow.scanning = true; flow.error = false; flow.errorMsg = ""; flow.bioSuccess = false;
+    render();
+    rpc("obtener_template_huella", { p_colaborador_id: flow.employeeId })
+      .then(function(tplRes){
+        var storedTemplate = (tplRes && tplRes.ok && tplRes.template) ? tplRes.template : null;
+        return httpLocalBiometric("POST", "/match", {
+          colaborador_id: flow.employeeId,
+          stored_template: storedTemplate
+        });
+      })
+      .then(function(matchRes){
+        if(ui.pinFlow !== flow) return;
+        if(matchRes && matchRes.ok && matchRes.match){
+          flow.scanning = false;
+          flow.bioSuccess = true;
+          render();
+          setTimeout(function(){
+            submitPin(matchRes.token);
+          }, 450);
+        } else {
+          flow.scanning = false;
+          flow.error = true;
+          flow.errorMsg = (matchRes && matchRes.mensaje) || "La huella no coincide. Intenta de nuevo o ingresa el NIP.";
+          render();
+        }
+      })
+      .catch(function(err){
+        if(ui.pinFlow !== flow) return;
+        flow.scanning = false;
+        flow.error = true;
+        flow.errorMsg = "Lector no disponible. Cambia a NIP para continuar.";
+        render();
+      });
+  }
+
+  function enrolarCapture(){
+    var flow = ui.enrolarFlow;
+    if(!flow || flow.scanning) return;
+    flow.scanning = true; flow.error = ""; render();
+    httpLocalBiometric("POST", "/capture", {
+      colaborador_id: flow.empId,
+      semilla: "muestra" + flow.step,
+      dedo: "indice_derecho"
+    }).then(function(capRes){
+      if(ui.enrolarFlow !== flow) return;
+      if(!capRes || !capRes.ok || !capRes.template){
+        flow.scanning = false;
+        flow.error = "No se pudo leer la huella. Coloca el dedo firmemente.";
+        render();
+        return;
+      }
+      if(flow.step === 1){
+        flow.sample1 = capRes.template;
+        flow.step = 2;
+        flow.scanning = false;
+        render();
+      } else {
+        rpc("registrar_huella", {
+          p_colaborador_id: flow.empId,
+          p_template: capRes.template,
+          p_calidad: capRes.calidad || 98,
+          p_dedo: capRes.dedo || "indice_derecho"
+        }).then(function(regRes){
+          if(ui.enrolarFlow !== flow) return;
+          if(regRes && regRes.ok){
+            flow.scanning = false;
+            flow.success = true;
+            var emps = employees.filter(function(e){ return e.id === flow.empId; });
+            if(emps[0]) emps[0].huellaRegistrada = true;
+            toast("ok", "Huella registrada exitosamente en almacén.");
+            render();
+          } else {
+            flow.scanning = false;
+            flow.error = "Error al guardar en base de datos.";
+            render();
+          }
+        }).catch(function(e){
+          flow.scanning = false;
+          flow.error = e.message || "Error al conectar con la base de datos.";
+          render();
+        });
+      }
+    }).catch(function(err){
+      if(ui.enrolarFlow !== flow) return;
+      flow.scanning = false;
+      flow.error = "No se detectó el servicio del lector (127.0.0.1:8765). Asegúrate de iniciarlo en la PC.";
+      render();
+    });
   }
 
   function pinPress(d){
@@ -2003,7 +2202,7 @@
     if(ui.pinFlow.pin.length>=4) return;
     ui.pinFlow.pin += d;
     render();
-    if(ui.pinFlow.pin.length===4){ setTimeout(submitPin,120); }
+    if(ui.pinFlow.pin.length===4){ setTimeout(function(){ submitPin(); },120); }
   }
   function pinDel(){
     if(!ui.pinFlow || ui.pinFlow.pending) return;
@@ -2013,11 +2212,12 @@
 
   // El NIP se envía a la función crear_resguardo de la base; allí se compara
   // con el hash bcrypt, se cuentan los intentos y se crean los resguardos.
-  function submitPin(){
+  function submitPin(tokenOverride){
     var flow = ui.pinFlow;
-    if(!flow || flow.pending || flow.pin.length !== 4) return;
+    if(!flow || flow.pending) return;
+    var pin = tokenOverride || flow.pin;
+    if(!tokenOverride && flow.pin.length !== 4) return;
     var emp = empName(flow.employeeId);
-    var pin = flow.pin;
     flow.pending = true;
     render();
     var items = ui.cart.map(function(c){ return { herramienta: c.herramienta, cantidad: c.cantidad, occ: c.occ, id_articulo: c.idArticulo, condicion: c.condicion }; });
@@ -2027,8 +2227,8 @@
     }).then(function(res){
       if(ui.pinFlow !== flow) return;
       if(!res || !res.ok){
-        flow.error = true; flow.pending = false; flow.pin = ""; flow.shake = true;
-        flow.errorMsg = (res && res.mensaje) || "NIP incorrecto, intenta de nuevo";
+        flow.error = true; flow.pending = false; flow.pin = ""; flow.shake = true; flow.scanning = false;
+        flow.errorMsg = (res && res.mensaje) || (tokenOverride ? "Error en autorización biométrica" : "NIP incorrecto, intenta de nuevo");
         render();
         return;
       }
@@ -2051,7 +2251,7 @@
     }, function(e){
       if(ui.pinFlow !== flow) return;
       if(e.status === 401){ onSessionLost(); return; }
-      flow.pending = false; flow.pin = ""; flow.error = true; flow.shake = true;
+      flow.pending = false; flow.pin = ""; flow.error = true; flow.shake = true; flow.scanning = false;
       flow.errorMsg = e.network ? "Sin conexión. Revisa tu internet e intenta de nuevo; no se registró nada duplicado." : e.message;
       render();
     });
@@ -2124,6 +2324,16 @@
         case "pin-digit": pinPress(actionEl.dataset.digit); break;
         case "pin-del": pinDel(); break;
         case "pin-cancel": if(ui.pinFlow && !ui.pinFlow.pending){ ui.pinFlow = null; render(); } break;
+        case "pin-switch-method":
+          if(ui.pinFlow){ ui.pinFlow.authMethod = actionEl.dataset.method; ui.pinFlow.error = false; ui.pinFlow.errorMsg = ""; render(); }
+          break;
+        case "pin-scan-fingerprint": scanBiometricAuth(); break;
+        case "open-enrolar-huella":
+          ui.enrolarFlow = { empId: id, step: 1, sample1: null, scanning: false, error: "", success: false };
+          render();
+          break;
+        case "enrolar-cancel": ui.enrolarFlow = null; render(); break;
+        case "enrolar-capture": enrolarCapture(); break;
         case "view-employee-tools": ui.viewEmployeeToolsId = id; render(); break;
         case "close-employee-tools": ui.viewEmployeeToolsId = null; render(); break;
         case "quitar-sin-pin": openAuth("quitar-sin-pin", {resguardoId:id}); break;
@@ -2289,6 +2499,7 @@
     if(e.key === "Escape" && ui.print){ ui.print = null; render(); return; }
     if(e.key === "Escape" && ui.revFlow && !ui.revFlow.pending){ ui.revFlow = null; render(); return; }
     if(e.key === "Escape"){
+      if(ui.enrolarFlow && !ui.enrolarFlow.scanning){ ui.enrolarFlow = null; render(); return; }
       if(ui.pinFlow && !ui.pinFlow.pending){ ui.pinFlow = null; render(); return; }
       if(ui.trFlow && !ui.trFlow.pending && ui.trFlow.step !== "ok"){ ui.trFlow = null; render(); return; }
       if(ui.pwFlow && !ui.pwFlow.pending){ ui.pwFlow = null; render(); return; }
@@ -2385,6 +2596,7 @@
   (function init(){
     ui.sidebarCollapsed = readCollapsed();
     showSplash();
+    checkBiometricService();
     if(!configOk()){ ui.booting = false; render(); return; }
     var hasStored = false;
     try{ hasStored = !!sessionStorage.getItem(SESSION_KEY); }catch(e){}
