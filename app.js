@@ -2805,17 +2805,30 @@
       document.body.classList.remove("splashing");
       document.body.classList.add("afterSplash", "flying");
       if(target && logo && logo.animate){
+        var card = document.querySelector(".loginCard");
+        var prevCardTrans = "", prevCardAnim = "";
+        if(card){
+          prevCardTrans = card.style.transform;
+          prevCardAnim = card.style.animation;
+          card.style.transform = "none";
+          card.style.animation = "none";
+        }
         var a = logo.getBoundingClientRect(), b = target.getBoundingClientRect();
+        if(card){
+          card.style.transform = prevCardTrans;
+          card.style.animation = prevCardAnim;
+        }
         if(b.width > 0){
           var dx = (b.left + b.width / 2) - (a.left + a.width / 2), dy = (b.top + b.height / 2) - (a.top + a.height / 2);
-          logo.animate([{ transform: "translate(0,0) scale(1) rotate(0deg)" },
-                        { transform: "translate(" + dx + "px," + dy + "px) scale(" + (b.width / a.width) + ") rotate(360deg)" }],
-                       { duration: 680, easing: "cubic-bezier(0.32,0.72,0,1)", fill: "forwards" });
+          logo.animate([
+            { transform: "translate(0,0) scale(1) rotate(0deg)", opacity: 1 },
+            { transform: "translate(" + dx + "px," + dy + "px) scale(" + (b.width / a.width) + ") rotate(0deg)", opacity: 1 }
+          ], { duration: 540, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards" });
         }
       }
       d.classList.add("out");
-      setTimeout(function(){ document.body.classList.remove("flying"); }, 660);
-      setTimeout(function(){ if(d.parentNode) d.parentNode.removeChild(d); setTimeout(function(){ document.body.classList.remove("afterSplash"); }, 900); }, 760);
+      setTimeout(function(){ document.body.classList.remove("flying"); }, 520);
+      setTimeout(function(){ if(d.parentNode) d.parentNode.removeChild(d); setTimeout(function(){ document.body.classList.remove("afterSplash"); }, 700); }, 620);
     }
     function onKey(){ finish(); }
     timer = setTimeout(finish, 2300);
