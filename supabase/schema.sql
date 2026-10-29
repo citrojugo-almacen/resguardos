@@ -165,6 +165,7 @@ create table if not exists public.herramientas (
   creado_por   uuid
 );
 create unique index if not exists herramientas_nombre_uq on public.herramientas (nombre_norm);
+alter table public.herramientas add column if not exists costo numeric(12,2) not null default 0.00;
 
 create table if not exists public.resguardos (
   id                uuid primary key default gen_random_uuid(),
@@ -189,6 +190,8 @@ create table if not exists public.resguardos (
 create index if not exists resguardos_colab_activo_idx on public.resguardos (colaborador_id) where estado = 'activo';
 -- Condición en que se entregó la herramienta (NULL = registros anteriores a este campo).
 alter table public.resguardos add column if not exists condicion text;
+-- Costo unitario congelado al momento del préstamo (exclusivo supervisión/gerencia)
+alter table public.resguardos add column if not exists costo_unitario numeric(12,2) not null default 0.00;
 -- Última revisión física (auditoría) mientras está en resguardo.
 alter table public.resguardos add column if not exists revision_en        timestamptz;
 alter table public.resguardos add column if not exists revision_resultado text;
@@ -321,15 +324,23 @@ returns void language sql volatile security definer set search_path = '' as $$
 $$;
 
 create or replace function app.resguardo_json(r public.resguardos)
-returns jsonb language sql stable set search_path = '' as $$
-  select jsonb_build_object(
+returns jsonb language plpgsql stable set search_path = '' as $$
+declare
+  v_rol text := app.rol_actual();
+  v_j jsonb;
+begin
+  v_j := jsonb_build_object(
     'id', r.id, 'grupo_id', r.grupo_id, 'colaborador_id', r.colaborador_id,
     'herramienta', r.herramienta, 'cantidad', r.cantidad, 'occ', r.occ, 'id_articulo', r.id_articulo,
     'fecha_prestamo', r.fecha_prestamo, 'fecha_devolucion', r.fecha_devolucion, 'estado', r.estado,
     'notas', r.notas, 'creado_por', r.creado_por, 'devuelto_por', r.devuelto_por, 'creado_en', r.creado_en,
     'condicion', r.condicion, 'revision_en', r.revision_en, 'revision_resultado', r.revision_resultado,
-    'revision_por', r.revision_por, 'revision_nota', r.revision_nota)
-$$;
+    'revision_por', r.revision_por, 'revision_nota', r.revision_nota);
+  if v_rol in ('admin', 'supervisor') then
+    v_j := v_j || jsonb_build_object('costo_unitario', coalesce(r.costo_unitario, 0.00));
+  end if;
+  return v_j;
+end $$;
 
 -- Perfil automático al crear un usuario en Supabase Auth (nace inactivo).
 create or replace function app.nuevo_usuario()
@@ -405,6 +416,7 @@ declare
   v_fallos  int;
   v_item    jsonb;
   v_herr    text; v_cant int; v_occ text; v_ida text;
+  v_costo   numeric(12,2) := 0.00;
   v_grupo   uuid := coalesce(p_solicitud, gen_random_uuid());
   v_row     public.resguardos%rowtype;
   v_rows    jsonb := '[]'::jsonb;
@@ -531,9 +543,18 @@ begin
     v_cant := coalesce((v_item ->> 'cantidad')::int, 1);
     v_occ  := btrim(coalesce(v_item ->> 'occ', ''));
     v_ida  := btrim(coalesce(v_item ->> 'id_articulo', ''));
+
+    select coalesce(costo, 0.00) into v_costo
+      from public.herramientas
+     where (v_ida <> '' and id_articulo = v_ida)
+        or nombre_norm = app.normalizar(v_herr)
+     order by (case when v_ida <> '' and id_articulo = v_ida then 0 else 1 end)
+     limit 1;
+    v_costo := coalesce(v_costo, 0.00);
+
     insert into public.resguardos (grupo_id, colaborador_id, herramienta, cantidad, occ, id_articulo,
-                                   fecha_prestamo, estado, notas, creado_por, creado_por_id, condicion)
-    values (v_grupo, p_colaborador_id, v_herr, v_cant, v_occ, v_ida, v_fecha, 'activo', v_notas, v_user, v_uid, v_item ->> 'condicion')
+                                   fecha_prestamo, estado, notas, creado_por, creado_por_id, condicion, costo_unitario)
+    values (v_grupo, p_colaborador_id, v_herr, v_cant, v_occ, v_ida, v_fecha, 'activo', v_notas, v_user, v_uid, v_item ->> 'condicion', v_costo)
     returning * into v_row;
     v_rows := v_rows || jsonb_build_array(app.resguardo_json(v_row));
 
@@ -942,26 +963,66 @@ begin
 end $$;
 
 -- ---------- Catálogo ----------
-create or replace function public.agregar_herramienta(p_nombre text, p_id_articulo text default '')
+create or replace function public.agregar_herramienta(p_nombre text, p_id_articulo text default '', p_costo numeric default 0.00)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
-declare v_t public.herramientas%rowtype; v_nombre text := btrim(coalesce(p_nombre, ''));
+declare
+  v_t public.herramientas%rowtype;
+  v_nombre text := btrim(coalesce(p_nombre, ''));
+  v_rol text;
+  v_costo numeric(12,2) := 0.00;
 begin
-  perform app.exigir(array['admin', 'supervisor', 'almacen']);
+  v_rol := app.exigir(array['admin', 'supervisor', 'almacen']);
   if char_length(v_nombre) < 1 or char_length(v_nombre) > 200 then
     raise exception using errcode = '22023', message = 'Escribe el nombre de la herramienta (máx. 200 caracteres).';
   end if;
   if char_length(coalesce(p_id_articulo, '')) > 60 then
     raise exception using errcode = '22023', message = 'El ID de artículo admite máximo 60 caracteres.';
   end if;
-  insert into public.herramientas (nombre, id_articulo, creado_por)
-  values (v_nombre, btrim(coalesce(p_id_articulo, '')), auth.uid())
+  if v_rol in ('admin', 'supervisor') and p_costo is not null and p_costo >= 0 then
+    v_costo := round(p_costo, 2);
+  end if;
+  insert into public.herramientas (nombre, id_articulo, creado_por, costo)
+  values (v_nombre, btrim(coalesce(p_id_articulo, '')), auth.uid(), v_costo)
   on conflict (nombre_norm) do nothing
   returning * into v_t;
   if v_t.id is null then
     raise exception using errcode = '23505', message = 'Esa herramienta ya está en el catálogo.';
   end if;
-  perform app.log('herramienta_alta', 'herramienta', v_t.id::text, jsonb_build_object('nombre', v_t.nombre));
-  return jsonb_build_object('id', v_t.id, 'nombre', v_t.nombre, 'id_articulo', v_t.id_articulo);
+  perform app.log('herramienta_alta', 'herramienta', v_t.id::text, jsonb_build_object('nombre', v_t.nombre, 'costo', v_t.costo));
+  if v_rol in ('admin', 'supervisor') then
+    return jsonb_build_object('id', v_t.id, 'nombre', v_t.nombre, 'id_articulo', v_t.id_articulo, 'costo', v_t.costo);
+  else
+    return jsonb_build_object('id', v_t.id, 'nombre', v_t.nombre, 'id_articulo', v_t.id_articulo);
+  end if;
+end $$;
+
+-- Compatibilidad firma 2 argumentos
+create or replace function public.agregar_herramienta(p_nombre text, p_id_articulo text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+begin
+  return public.agregar_herramienta(p_nombre, p_id_articulo, 0.00);
+end $$;
+
+create or replace function public.actualizar_costo_herramienta(p_id uuid, p_costo numeric)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_t public.herramientas%rowtype;
+  v_ant numeric(12,2);
+  v_costo numeric(12,2);
+begin
+  perform app.exigir(array['admin', 'supervisor']);
+  if p_costo is null or p_costo < 0 then
+    raise exception using errcode = '22023', message = 'El costo debe ser un valor mayor o igual a 0.';
+  end if;
+  v_costo := round(p_costo, 2);
+  select costo into v_ant from public.herramientas where id = p_id;
+  if not found then
+    raise exception using errcode = 'P0002', message = 'Herramienta no encontrada.';
+  end if;
+  update public.herramientas set costo = v_costo where id = p_id returning * into v_t;
+  perform app.log('herramienta_costo_actualizado', 'herramienta', v_t.id::text,
+    jsonb_build_object('nombre', v_t.nombre, 'id_articulo', v_t.id_articulo, 'costo_anterior', v_ant, 'costo_nuevo', v_costo));
+  return jsonb_build_object('ok', true, 'id', v_t.id, 'nombre', v_t.nombre, 'costo', v_t.costo);
 end $$;
 
 create or replace function public.eliminar_herramienta(p_id uuid)
@@ -1801,6 +1862,8 @@ grant execute on function
   public.cambiar_nip(uuid, text),
   public.editar_fecha_prestamo(uuid, date),
   public.agregar_herramienta(text, text),
+  public.agregar_herramienta(text, text, numeric),
+  public.actualizar_costo_herramienta(uuid, numeric),
   public.eliminar_herramienta(uuid),
   public.admin_actualizar_usuario(uuid, text, boolean),
   public.registrar_revision(uuid, text, text),

@@ -238,6 +238,12 @@
   .pill.activo::before{background:var(--okLine);box-shadow:0 0 0 2px rgba(139,197,63,.25);}
   .pill.devuelto{color:var(--label2);background:#ECECF0;}
 
+  /* Insignia de costo (exclusiva supervisión y gerencia) */
+  .priceTag{display:inline-flex;align-items:center;padding:2px 7px;border-radius:6px;font-size:11.5px;font-weight:600;font-family:var(--mono);background:rgba(47,106,60,.09);color:var(--tint);border:1px solid rgba(47,106,60,.22);vertical-align:middle;}
+  .priceTag.zero{background:var(--fill);color:var(--label3);border:1px solid var(--sep);}
+  .priceTag.clickable{cursor:pointer;transition:all 120ms ease;}
+  @media (hover:hover){ .priceTag.clickable:hover{background:rgba(47,106,60,.18);border-color:var(--tint);} }
+
   .empRow{display:flex;align-items:center;gap:9px;margin-top:12px;font-size:14.5px;}
   .datesGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--sep);
     font-size:12.5px;color:var(--label3);}

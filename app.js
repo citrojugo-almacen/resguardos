@@ -262,6 +262,29 @@
   function isoDate(v){ return (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : ""; }
   function mapEmployee(c){ return { id: String(c.id), numero: String(c.numero_empleado || ""), nombre: String(c.nombre || ""), area: String(c.area || ""), puesto: String(c.puesto || ""), activo: c.activo !== false, nipPendiente: !!c.nip_pendiente, huellaRegistrada: !!c.huella_registrada }; }
   function normNum(s){ return String(s || "").replace(/\s+/g, "").toUpperCase(); }
+  function puedeVerCostos(){
+    var r = ui.currentUser && ui.currentUser.rol;
+    return r === "admin" || r === "supervisor";
+  }
+  function formatMoney(amount){
+    var n = Number(amount) || 0;
+    return "$" + n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " MXN";
+  }
+  function findToolCost(idArticulo, nombre){
+    var ida = (idArticulo || "").trim().toUpperCase();
+    var n = norm(nombre);
+    for(var i = 0; i < tools.length; i++){
+      if(ida && tools[i].idArticulo && tools[i].idArticulo.toUpperCase() === ida){
+        return tools[i].costo || 0;
+      }
+    }
+    for(var j = 0; j < tools.length; j++){
+      if(norm(tools[j].nombre) === n){
+        return tools[j].costo || 0;
+      }
+    }
+    return 0;
+  }
   // "Nombre · #123" para mostrar al colaborador con su número de empleado.
   function reduceMotion(){ try{ return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches); }catch(e){ return false; } }
   function findRes(id){ for(var i=0;i<resguardos.length;i++){ if(resguardos[i].id === id) return resguardos[i]; } return null; }
@@ -274,12 +297,13 @@
     var n = norm(q), u = normNum(q);
     return norm(emp.nombre).indexOf(n) >= 0 || (!!u && !!emp.numero && emp.numero.indexOf(u) >= 0);
   }
-  function mapTool(t){ return { id: String(t.id), nombre: String(t.nombre || ""), idArticulo: String(t.id_articulo || "") }; }
+  function mapTool(t){ return { id: String(t.id), nombre: String(t.nombre || ""), idArticulo: String(t.id_articulo || ""), costo: puedeVerCostos() ? (parseFloat(t.costo) || 0) : 0 }; }
   function mapResguardo(r){
     return {
       id: String(r.id), grupoId: r.grupo_id ? String(r.grupo_id) : "", employeeId: String(r.colaborador_id),
       herramienta: String(r.herramienta || ""), cantidad: Math.max(1, parseInt(r.cantidad, 10) || 1),
       occ: String(r.occ || ""), idArticulo: String(r.id_articulo || ""),
+      costoUnitario: puedeVerCostos() ? (parseFloat(r.costo_unitario) || 0) : 0,
       fechaPrestamo: isoDate(r.fecha_prestamo), fechaDevolucion: isoDate(r.fecha_devolucion),
       estado: r.estado === "devuelto" ? "devuelto" : "activo", notas: String(r.notas || ""),
       creadoPor: String(r.creado_por || ""), devueltoPor: String(r.devuelto_por || ""),
@@ -308,11 +332,22 @@
   function loadData(opts){
     opts = opts || {};
     if(!opts.silent){ ui.loading = true; ui.loadError = ""; render(); }
+    var verCostos = puedeVerCostos();
+    var toolCols = verCostos ? "id,nombre,id_articulo,costo" : "id,nombre,id_articulo";
+    var resCols = verCostos ? (RES_COLS + ",costo_unitario") : RES_COLS;
     return Promise.all([
       selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada", "nombre.asc,id.asc"),
-      selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc"),
-      selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc").catch(function(e){
-        if(e.status === 400) return selectAll("resguardos", RES_COLS_BASE, "creado_en.desc,id.desc");   // base sin actualizar
+      selectAll("herramientas", toolCols, "nombre.asc,id.asc").catch(function(e){
+        if(verCostos && e.status === 400) return selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc");
+        throw e;
+      }),
+      selectAll("resguardos", resCols, "creado_en.desc,id.desc").catch(function(e){
+        if(e.status === 400){
+          return selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc").catch(function(e2){
+            if(e2.status === 400) return selectAll("resguardos", RES_COLS_BASE, "creado_en.desc,id.desc");
+            throw e2;
+          });
+        }
         throw e;
       }),
       ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,cargo,activo", "email.asc") : Promise.resolve(null),
@@ -782,8 +817,20 @@
       '<div class="metric m-lime"><div class="metricLabel">Resguardos activos</div><div class="metricValue" data-count="'+activos.length+'">'+activos.length.toLocaleString("es-MX")+'</div></div>' +
       '<div class="metric m-amber"><div class="metricLabel">Devueltos</div><div class="metricValue" data-count="'+devueltos.length+'">'+devueltos.length.toLocaleString("es-MX")+'</div></div>' +
       '<div class="metric m-teal"><div class="metricLabel">Colaboradores</div><div class="metricValue" data-count="'+employees.length+'">'+employees.length.toLocaleString("es-MX")+'</div></div>' +
-      '<div class="metric m-plum"><div class="metricLabel">Catálogo</div><div class="metricValue" data-count="'+tools.length+'">'+tools.length.toLocaleString("es-MX")+'</div></div>' +
-    '</div>';
+      '<div class="metric m-plum"><div class="metricLabel">Catálogo</div><div class="metricValue" data-count="'+tools.length+'">'+tools.length.toLocaleString("es-MX")+'</div></div>';
+
+    if(puedeVerCostos()){
+      var capitalEnCampo = 0;
+      activos.forEach(function(r){
+        var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
+        capitalEnCampo += (c * (r.cantidad || 1));
+      });
+      html += '<div class="metric" style="border-left:4px solid var(--tint);background:linear-gradient(180deg, #FFFFFF 0%, rgba(47,106,60,0.04) 100%);">' +
+        '<div class="metricLabel" style="color:var(--tint);font-weight:600;">Capital en resguardo (campo)</div>' +
+        '<div class="metricValue" style="font-size:22px;color:var(--tint);font-family:var(--mono);">'+formatMoney(capitalEnCampo)+'</div>' +
+      '</div>';
+    }
+    html += '</div>';
 
     html += '<div class="chartsRow">';
 
@@ -990,16 +1037,33 @@
     }
     var cartHtml = "";
     if(ui.cart.length){
+      var verCostos = puedeVerCostos();
+      var totalCarrito = 0;
       cartHtml = '<div class="cartBox">' +
         '<div class="cartHead"><span>Herramienta en este resguardo</span><span aria-label="'+ui.cart.length+' en la lista">'+ui.cart.length+'</span></div>' +
         ui.cart.map(function(c){
           var sub = [];
           if(c.idArticulo) sub.push('ID '+esc(c.idArticulo));
           if(c.occ) sub.push('OCC '+esc(c.occ));
+          var unitCost = 0;
+          if(verCostos){
+            unitCost = findToolCost(c.idArticulo, c.herramienta);
+            var rowTotal = unitCost * c.cantidad;
+            totalCarrito += rowTotal;
+            if(unitCost > 0){
+              sub.push(c.cantidad > 1 ? (formatMoney(unitCost) + ' c/u · Subtotal: ' + formatMoney(rowTotal)) : formatMoney(unitCost));
+            }
+          }
           return '<div class="toolRow"><span style="min-width:0;"><b style="font-weight:600;">'+esc(c.herramienta)+'</b> <span class="qty">×'+c.cantidad+'</span> '+condChip(c.condicion) +
+            (verCostos && unitCost > 0 ? ' <span class="priceTag">'+formatMoney(unitCost * c.cantidad)+'</span>' : '') +
             (sub.length ? '<span class="sub code">'+sub.join(' · ')+'</span>' : '') +
             '</span><button type="button" class="deleteBtn" data-action="cart-remove" data-id="'+c.tempId+'" title="Quitar de la lista" aria-label="Quitar de la lista">'+icon("trash")+'</button></div>';
         }).join("") +
+        (verCostos && totalCarrito > 0 ?
+          '<div style="padding:10px 14px;background:rgba(47,106,60,0.08);border-top:1px solid var(--sep);display:flex;justify-content:space-between;align-items:center;">' +
+            '<span style="font-size:13px;font-weight:600;color:var(--tint);">Valor total del resguardo</span>' +
+            '<span style="font-size:15px;font-weight:700;color:var(--tint);font-family:var(--mono);">'+formatMoney(totalCarrito)+'</span>' +
+          '</div>' : '') +
       '</div>';
     }
     return '' +
@@ -1047,10 +1111,12 @@
     }) : tools;
     full = full.slice().sort(function(a,b){ return norm(a.nombre).localeCompare(norm(b.nombre)); });
     var page = paginate(full, "catalogo");
+    var verCostos = puedeVerCostos();
     var html = '<p class="sectionTitle">Agregar herramienta al catálogo</p><div class="card" style="max-width:520px;">' +
       '<form id="form-new-tool">' +
         '<input type="text" id="input-cat-nombre" placeholder="Nombre de la herramienta" value="'+esc(ui.catForm.nombre)+'" style="margin-bottom:8px;"/>' +
         '<input type="text" id="input-cat-idarticulo" placeholder="ID de artículo (opcional)" value="'+esc(ui.catForm.idArticulo)+'" style="margin-bottom:8px;font-family:var(--mono)"/>' +
+        (verCostos ? '<input type="number" step="0.01" min="0" id="input-cat-costo" placeholder="Costo unitario sugerido (MXN, opcional)" value="'+esc(ui.catForm.costo || "")+'" style="margin-bottom:8px;font-family:var(--mono)"/>' : '') +
         (ui.catFormError ? '<p class="errorText" style="margin:0 0 8px;">'+icon("alert")+' '+esc(ui.catFormError)+'</p>' : '') +
         '<button type="submit" class="btnPrimary" style="margin-top:6px;min-height:44px;font-size:15px;">'+icon("plus")+' Agregar al catálogo</button>' +
       '</form>' +
@@ -1067,7 +1133,13 @@
             '<div class="confirmActions"><button class="confirmYes" data-action="confirm-delete-tool" data-id="'+t.id+'">Sí, eliminar</button>' +
             '<button class="confirmNo" data-action="cancel-delete-tool">Cancelar</button></div></div>';
         } else {
-          html += '<div class="toolRow"><span style="min-width:0;">'+esc(t.nombre)+
+          var tag = '';
+          if(verCostos){
+            tag = t.costo > 0 ?
+              ' <span class="priceTag clickable" data-action="edit-tool-cost" data-id="'+t.id+'" title="Haz clic para actualizar costo unitario">'+formatMoney(t.costo)+'</span>' :
+              ' <span class="priceTag zero clickable" data-action="edit-tool-cost" data-id="'+t.id+'" title="Sin costo registrado. Haz clic para asignar">$0.00</span>';
+          }
+          html += '<div class="toolRow"><span style="min-width:0;">'+esc(t.nombre)+tag+
             (t.idArticulo ? '<span class="sub code">ID '+esc(t.idArticulo)+'</span>' : '') +
             '</span>' +
             '<button class="deleteBtn" data-action="request-delete-tool" data-id="'+t.id+'" title="Eliminar del catálogo" aria-label="Eliminar del catálogo">'+icon("trash")+'</button></div>';
@@ -1139,16 +1211,25 @@
       });
     }
     var page = paginate(list, "tabla");
+    var verCostos = puedeVerCostos();
     var html = '<div class="searchWrap"><span class="searchIcon">'+icon("search")+'</span>' +
       '<input type="text" id="input-search-table" placeholder="Buscar en la tabla ('+resguardos.length+' en total)" value="'+esc(ui.tableQuery)+'"/></div>';
     if(list.length===0){
       html += '<p class="empty">Sin registros.</p>';
     } else {
+      var headers = ["Entrega","Colaborador","Herramienta","Cant.","Condición","OCC","ID art."];
+      if(verCostos) headers.push("Costo unit.");
+      headers.push("Estado","Devuelto","Autorizó","Notas");
       html += '<div class="tableScroll"><table><thead><tr>' +
-        ["Entrega","Colaborador","Herramienta","Cant.","Condición","OCC","ID art.","Estado","Devuelto","Autorizó","Notas"].map(function(h){return '<th'+(h==="Cant."?' style="text-align:right;"':'')+'>'+h+'</th>';}).join("") +
+        headers.map(function(h){return '<th'+(h==="Cant."||h==="Costo unit."?' style="text-align:right;"':'')+'>'+h+'</th>';}).join("") +
         '</tr></thead><tbody>';
       page.shown.forEach(function(r){
         var emp = empName(r.employeeId);
+        var costCell = '';
+        if(verCostos){
+          var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
+          costCell = '<td style="text-align:right;font-family:var(--mono);">'+(c > 0 ? formatMoney(c) : '<span class="dim">—</span>')+'</td>';
+        }
         html += '<tr'+(r.estado==="devuelto"?' class="devuelto-row"':'')+'>' +
           '<td>'+fmtShort(r.fechaPrestamo)+'</td>' +
           '<td class="clip" title="'+(emp?esc(empLabel(emp)):"")+'">'+(emp?esc(emp.nombre):"—")+(emp && emp.numero ? ' <span class="code dim">#'+esc(emp.numero)+'</span>' : '')+'</td>' +
@@ -1157,6 +1238,7 @@
           '<td>'+(r.condicion?CONDICION[r.condicion]:'<span class="dim">—</span>')+'</td>' +
           '<td class="code">'+(r.occ?esc(r.occ):"—")+'</td>' +
           '<td class="code">'+(r.idArticulo?esc(r.idArticulo):"—")+'</td>' +
+          costCell +
           '<td><span class="estado '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+'</span></td>' +
           '<td>'+fmtShort(r.fechaDevolucion)+'</td>' +
           '<td class="dim">'+(r.creadoPor?esc(r.creadoPor):"—")+'</td>' +
@@ -1280,9 +1362,19 @@
     var emp = empName(ui.viewEmployeeToolsId);
     if(!emp) return "";
     var items = resguardos.filter(function(r){ return r.employeeId===emp.id && r.estado==="activo"; });
+    var verCostos = puedeVerCostos();
+    var totalEmpValor = 0;
+    if(verCostos){
+      items.forEach(function(r){
+        var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
+        totalEmpValor += (c * (r.cantidad || 1));
+      });
+    }
     var rows = items.length===0 ? '<p class="empty">Este colaborador no tiene herramienta en resguardo.</p>' :
       items.map(function(r){
-        return '<div class="toolRow"><span style="min-width:0;">'+esc(r.herramienta)+(r.cantidad>1?' <span class="qty">×'+r.cantidad+'</span>':'')+' '+condChip(r.condicion)+
+        var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
+        var costBadge = (verCostos && c > 0) ? ' <span class="priceTag">'+formatMoney(c * r.cantidad)+'</span>' : '';
+        return '<div class="toolRow"><span style="min-width:0;">'+esc(r.herramienta)+(r.cantidad>1?' <span class="qty">×'+r.cantidad+'</span>':'')+' '+condChip(r.condicion)+costBadge+
           '<span class="sub">Entregado '+fmt(r.fechaPrestamo)+'</span></span>' +
           '<button class="deleteBtn" data-action="quitar-sin-pin" data-id="'+r.id+'" title="Quitar del resguardo (requiere autorización)" aria-label="Quitar del resguardo">'+icon("trash")+'</button></div>';
       }).join("");
@@ -1291,6 +1383,11 @@
       '<div class="modalHead"><div class="modalTitle">'+esc(emp.nombre)+'</div>' +
       '<button type="button" class="closeBtn" data-action="close-employee-tools" aria-label="Cerrar">'+icon("x")+'</button></div>' +
       '<p class="hint" style="margin:-8px 0 16px;font-size:14px;color:var(--label2);">Herramienta actualmente en resguardo. Quitar aquí pedirá correo y contraseña de un supervisor o administrador.</p>' +
+      (verCostos && totalEmpValor > 0 ?
+        '<div style="margin:-6px 0 16px;padding:9px 13px;background:rgba(47,106,60,0.08);border-radius:8px;border:1px solid rgba(47,106,60,0.18);display:flex;justify-content:space-between;align-items:center;">' +
+          '<span style="font-size:13px;font-weight:600;color:var(--tint);">Responsabilidad patrimonial activa:</span>' +
+          '<span style="font-size:15px;font-weight:700;color:var(--tint);font-family:var(--mono);">'+formatMoney(totalEmpValor)+'</span>' +
+        '</div>' : '') +
       rows +
     '</div></div>';
   }
@@ -1964,11 +2061,12 @@
     if(tools.some(function(t){return norm(t.nombre)===norm(nombre);})){
       ui.catFormError="Esa herramienta ya está en el catálogo."; render(); return;
     }
+    var costoVal = puedeVerCostos() ? (parseFloat(ui.catForm.costo) || 0) : 0;
     ui.busy = true;
-    rpc("agregar_herramienta", { p_nombre: nombre, p_id_articulo: ida }).then(function(t){
+    rpc("agregar_herramienta", { p_nombre: nombre, p_id_articulo: ida, p_costo: costoVal }).then(function(t){
       ui.busy = false;
       if(okId(t)) tools.push(mapTool(t));
-      ui.catForm = {nombre:"", idArticulo:""};
+      ui.catForm = {nombre:"", idArticulo:"", costo:""};
       toast("ok","Herramienta agregada al catálogo.");
     }, function(e){ ui.busy = false; ui.catFormError = e.message; render(); });
   }
@@ -2303,6 +2401,31 @@
         case "request-delete-tool": ui.confirmDeleteToolId = id; render(); break;
         case "cancel-delete-tool": ui.confirmDeleteToolId = null; render(); break;
         case "confirm-delete-tool": deleteTool(id); break;
+        case "edit-tool-cost": {
+          if(!puedeVerCostos()) break;
+          var toolToEdit = tools.filter(function(t){ return t.id === id; })[0];
+          if(!toolToEdit) break;
+          var rawVal = prompt("Actualizar costo unitario sugerido para:\n" + toolToEdit.nombre + (toolToEdit.idArticulo ? " (" + toolToEdit.idArticulo + ")" : "") + "\n\nIngresa el monto en pesos (MXN):", toolToEdit.costo || 0);
+          if(rawVal !== null){
+            var clean = rawVal.replace(/[^0-9.]/g, "");
+            var parsedCost = parseFloat(clean);
+            if(!isNaN(parsedCost) && parsedCost >= 0){
+              ui.busy = true;
+              rpc("actualizar_costo_herramienta", { p_id: toolToEdit.id, p_costo: parsedCost }).then(function(res){
+                ui.busy = false;
+                toolToEdit.costo = parsedCost;
+                toast("ok", "Costo actualizado a " + formatMoney(parsedCost));
+                render();
+              }, function(err){
+                ui.busy = false;
+                toast("err", err.message || "No se pudo actualizar el costo.");
+              });
+            } else {
+              toast("err", "Ingresa un número válido mayor o igual a 0.");
+            }
+          }
+          break;
+        }
         case "devolver": confirmReturn(id); break;
         case "transferir": openTransfer(id); break;
         case "tr-pick": trPick(id); break;
@@ -2446,6 +2569,7 @@
       case "input-search-employees": ui.empListQuery = v; ui.visible.empleados = ui.pageSize; render(); break;
       case "input-cat-nombre": ui.catForm.nombre = v; break;
       case "input-cat-idarticulo": ui.catForm.idArticulo = v; break;
+      case "input-cat-costo": ui.catForm.costo = v; break;
       case "input-emp-numero": ui.empForm.numero = v; break;
       case "input-emp-nombre": ui.empForm.nombre = v; break;
       case "input-emp-pin": { var p=v.replace(/\D/g,"").slice(0,4); ui.empForm.pin=p; e.target.value=p; break; }
