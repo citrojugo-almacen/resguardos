@@ -547,7 +547,7 @@ begin
     select coalesce(costo, 0.00) into v_costo
       from public.herramientas
      where (v_ida <> '' and id_articulo = v_ida)
-        or nombre_norm = app.normalizar(v_herr)
+        or nombre_norm = app.norm(v_herr)
      order by (case when v_ida <> '' and id_articulo = v_ida then 0 else 1 end)
      limit 1;
     v_costo := coalesce(v_costo, 0.00);
@@ -963,6 +963,7 @@ begin
 end $$;
 
 -- ---------- Catálogo ----------
+drop function if exists public.agregar_herramienta(text, text);
 create or replace function public.agregar_herramienta(p_nombre text, p_id_articulo text default '', p_costo numeric default 0.00)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
 declare
@@ -994,13 +995,6 @@ begin
   else
     return jsonb_build_object('id', v_t.id, 'nombre', v_t.nombre, 'id_articulo', v_t.id_articulo);
   end if;
-end $$;
-
--- Compatibilidad firma 2 argumentos
-create or replace function public.agregar_herramienta(p_nombre text, p_id_articulo text)
-returns jsonb language plpgsql volatile security definer set search_path = '' as $$
-begin
-  return public.agregar_herramienta(p_nombre, p_id_articulo, 0.00);
 end $$;
 
 create or replace function public.actualizar_costo_herramienta(p_id uuid, p_costo numeric)
@@ -1861,7 +1855,6 @@ grant execute on function
   public.baja_colaborador(uuid),
   public.cambiar_nip(uuid, text),
   public.editar_fecha_prestamo(uuid, date),
-  public.agregar_herramienta(text, text),
   public.agregar_herramienta(text, text, numeric),
   public.actualizar_costo_herramienta(uuid, numeric),
   public.eliminar_herramienta(uuid),

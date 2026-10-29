@@ -1206,4 +1206,4 @@ update public.resguardos r
    set costo_unitario = h.costo
   from public.herramientas h
  where (r.id_articulo <> '' and r.id_articulo = h.id_articulo)
-    or (r.id_articulo = '' and app.normalizar(r.herramienta) = h.nombre_norm);
+    or (r.id_articulo = '' and app.norm(r.herramienta) = h.nombre_norm);
