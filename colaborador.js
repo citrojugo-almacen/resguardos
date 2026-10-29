@@ -30,7 +30,13 @@
     actToken: null, actNumero: "", actUntil: 0, actTotal: 600,
     data: null, loading: false, tab: "activos",
     pwModal: null, toast: null,
-    entered: false             // el gafete ya hizo su entrada
+    entered: false,            // el gafete ya hizo su entrada
+    equipoData: null,
+    equipoLoading: false,
+    equipoQuery: "",
+    equipoFiltro: "todos",     // todos | con_herramienta | pendientes
+    expandedSubId: null,
+    auditModal: null           // { resguardoId, herramienta, colaborador, resultado: "bueno", nota: "", pending: false, error: "" }
   };
 
   // ---------- Utilidades ----------
@@ -46,6 +52,10 @@
   function fmt(iso){
     iso = isoDate(iso); if(!iso) return "—";
     var p = iso.split("-"); return Number(p[2]) + " " + MESES[Number(p[1]) - 1] + " " + p[0];
+  }
+  function fmtMoney(n){
+    if(n == null || isNaN(n)) return "—";
+    return "$" + Number(n).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " MXN";
   }
   function dayNum(iso){ var p = isoDate(iso).split("-"); return p.length === 3 ? Date.UTC(+p[0], +p[1] - 1, +p[2]) / 86400000 : NaN; }
   function daysBetween(a, b){ var d = dayNum(b) - dayNum(a); return isNaN(d) ? 0 : Math.max(0, Math.round(d)); }
@@ -82,7 +92,11 @@
       move:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h14"/><path d="m14 4 4 4-4 4"/><path d="M20 16H6"/><path d="m10 12-4 4 4 4"/></svg>',
       pad:'<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="20" rx="3"/><circle cx="9" cy="8" r=".6" fill="currentColor"/><circle cx="15" cy="8" r=".6" fill="currentColor"/><circle cx="9" cy="12.5" r=".6" fill="currentColor"/><circle cx="15" cy="12.5" r=".6" fill="currentColor"/><circle cx="9" cy="17" r=".6" fill="currentColor"/><circle cx="15" cy="17" r=".6" fill="currentColor"/></svg>',
       del:'<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/></svg>',
-      box:'<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg>'
+      box:'<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><line x1="12" y1="13" x2="12" y2="21"/></svg>',
+      chevron:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+      users:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+      clipboard:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>',
+      star:'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
     };
     return I[n] || "";
   }
@@ -329,12 +343,24 @@
       '<div class="sumItem' + (maxDias >= VIEJO ? ' s-old' : '') + '"><div class="sumLabel">Más antigua</div><div class="sumValue" data-count="' + (act.length ? maxDias : 0) + '">' + (act.length ? maxDias : '—') + '</div><div class="sumSub">' + (act.length ? (maxDias === 1 ? 'día contigo' : 'días contigo') : 'sin pendientes') + '</div></div>' +
     '</section>';
 
-    var seg = '<div class="seg' + (st.tab === "historial" ? ' right' : '') + '" role="tablist"><span class="segGlider" aria-hidden="true"></span>' +
-      '<button type="button" role="tab" class="segBtn' + (st.tab === "activos" ? ' on' : '') + '" aria-selected="' + (st.tab === "activos") + '" data-action="tab" data-tab="activos">En resguardo <span class="segCount">' + act.length + '</span></button>' +
-      '<button type="button" role="tab" class="segBtn' + (st.tab === "historial" ? ' on' : '') + '" aria-selected="' + (st.tab === "historial") + '" data-action="tab" data-tab="historial">Historial <span class="segCount">' + evs.length + '</span></button></div>';
+    var hasEquipo = !!(st.equipoData && st.equipoData.ok && st.equipoData.equipo && st.equipoData.equipo.length > 0);
+    var seg = '';
+    if(hasEquipo){
+      var posClass = st.tab === "activos" ? "pos-0" : (st.tab === "equipo" ? "pos-1" : "pos-2");
+      seg = '<div class="seg cols3 ' + posClass + '" role="tablist"><span class="segGlider" aria-hidden="true"></span>' +
+        '<button type="button" role="tab" class="segBtn' + (st.tab === "activos" ? ' on' : '') + '" aria-selected="' + (st.tab === "activos") + '" data-action="tab" data-tab="activos">Mis resguardos <span class="segCount">' + act.length + '</span></button>' +
+        '<button type="button" role="tab" class="segBtn' + (st.tab === "equipo" ? ' on' : '') + '" aria-selected="' + (st.tab === "equipo") + '" data-action="tab" data-tab="equipo">Mi personal <span class="segCount">' + st.equipoData.equipo.length + '</span></button>' +
+        '<button type="button" role="tab" class="segBtn' + (st.tab === "historial" ? ' on' : '') + '" aria-selected="' + (st.tab === "historial") + '" data-action="tab" data-tab="historial">Historial <span class="segCount">' + evs.length + '</span></button></div>';
+    } else {
+      seg = '<div class="seg' + (st.tab === "historial" ? ' right' : '') + '" role="tablist"><span class="segGlider" aria-hidden="true"></span>' +
+        '<button type="button" role="tab" class="segBtn' + (st.tab === "activos" ? ' on' : '') + '" aria-selected="' + (st.tab === "activos") + '" data-action="tab" data-tab="activos">En resguardo <span class="segCount">' + act.length + '</span></button>' +
+        '<button type="button" role="tab" class="segBtn' + (st.tab === "historial" ? ' on' : '') + '" aria-selected="' + (st.tab === "historial") + '" data-action="tab" data-tab="historial">Historial <span class="segCount">' + evs.length + '</span></button></div>';
+    }
 
     var body;
-    if(st.tab === "activos"){
+    if(st.tab === "equipo" && hasEquipo){
+      body = equipoTpl();
+    } else if(st.tab === "activos"){
       body = act.length === 0
         ? '<div class="empty"><span class="emptyIco">' + icon("check") + '</span><b>No tienes herramienta en resguardo</b>Cuando el almacén te entregue algo, aparecerá aquí con su fecha.</div>'
         : '<div class="list" id="list">' + act.map(function(r, i){
@@ -373,6 +399,142 @@
     return '<div class="portal">' + top + '<main class="wrap">' + badge + nipCardTpl() + summary + seg + body + foot + '</main></div>';
   }
 
+  function equipoTpl(){
+    if(!st.equipoData || !st.equipoData.ok) return '';
+    var eq = st.equipoData;
+    var lider = eq.lider || {};
+    var res = eq.resumen || {};
+    var list = eq.equipo || [];
+
+    var lvlMap = {
+      director_general: { label: "Director General", cls: "lvl-dg", ico: "star" },
+      director: { label: "Director de Área", cls: "lvl-dir", ico: "shield" },
+      gerente: { label: "Gerente", cls: "lvl-ger", ico: "users" },
+      supervisor: { label: "Supervisor / Coordinador", cls: "lvl-sup", ico: "users" }
+    };
+    var lInfo = lvlMap[lider.nivel] || { label: "Líder de Área", cls: "lvl-sup", ico: "users" };
+
+    var q = String(st.equipoQuery || "").trim().toLowerCase();
+    var filtro = st.equipoFiltro || "todos";
+
+    var filtered = list.filter(function(sub){
+      if(filtro === "con_herramienta" && (sub.herramientas_activas || 0) <= 0) return false;
+      if(filtro === "pendientes" && (sub.pendientes_revision || 0) <= 0) return false;
+      if(!q) return true;
+      var matchNombre = String(sub.nombre || "").toLowerCase().indexOf(q) >= 0;
+      var matchNum = String(sub.numero_empleado || "").toLowerCase().indexOf(q) >= 0;
+      var matchPuesto = String(sub.puesto || "").toLowerCase().indexOf(q) >= 0;
+      var matchArea = String(sub.area || "").toLowerCase().indexOf(q) >= 0;
+      return matchNombre || matchNum || matchPuesto || matchArea;
+    });
+
+    var conHerrCount = list.filter(function(s){ return (s.herramientas_activas || 0) > 0; }).length;
+    var pendCount = list.filter(function(s){ return (s.pendientes_revision || 0) > 0; }).length;
+
+    var html = '<div class="leaderBanner">' +
+      '<div class="leaderHead">' +
+        '<div class="leaderTitle">' + icon("users") + ' Personal a tu cargo</div>' +
+        '<span class="badgeLevel ' + lInfo.cls + '">' + icon(lInfo.ico) + ' ' + esc(lInfo.label) + '</span>' +
+      '</div>' +
+      '<p class="hint" style="margin:0 0 14px;">Supervisa el inventario de herramientas de tu equipo y realiza auditorías de campo para verificar su existencia y estado físico.</p>' +
+      '<div class="summary" style="margin:0;">' +
+        '<div class="sumItem s-on"><div class="sumLabel">Colaboradores</div><div class="sumValue">' + res.total_colaboradores + '</div><div class="sumSub">' + res.con_herramienta + ' con resguardo</div></div>' +
+        '<div class="sumItem"><div class="sumLabel">Herramientas</div><div class="sumValue">' + res.total_herramientas + '</div><div class="sumSub">piezas activas</div></div>' +
+        '<div class="sumItem' + (res.pendientes_revision > 0 ? ' s-old' : '') + '"><div class="sumLabel">Auditorías</div><div class="sumValue">' + (res.pendientes_revision || 0) + '</div><div class="sumSub">pendientes (>180 d)</div></div>' +
+      '</div>';
+
+    if(lider.puede_ver_costos && res.capital_total != null){
+      html += '<div class="capitalCard">' +
+        '<div><div class="capitalLabel">Capital total en resguardo</div><div class="capitalVal">' + fmtMoney(res.capital_total) + '</div><div class="capitalSub">Valuación monetaria oficial del inventario bajo tu dirección</div></div>' +
+        icon("shield") +
+      '</div>';
+    }
+
+    html += '</div>';
+
+    html += '<div class="equipoFilterWrap">' +
+      '<input type="text" id="in-search-equipo" placeholder="Buscar por colaborador, puesto o área..." value="' + esc(st.equipoQuery) + '"/>' +
+      '<div class="filterChips">' +
+        '<button type="button" class="filterChip' + (filtro === "todos" ? ' on' : '') + '" data-action="filtro-equipo" data-f="todos">Todos <span class="cnt">' + list.length + '</span></button>' +
+        '<button type="button" class="filterChip' + (filtro === "con_herramienta" ? ' on' : '') + '" data-action="filtro-equipo" data-f="con_herramienta">Con resguardo <span class="cnt">' + conHerrCount + '</span></button>' +
+        '<button type="button" class="filterChip' + (filtro === "pendientes" ? ' on' : '') + '" data-action="filtro-equipo" data-f="pendientes">Pendientes auditoría <span class="cnt">' + pendCount + '</span></button>' +
+      '</div>' +
+    '</div>';
+
+    if(filtered.length === 0){
+      html += '<div class="empty"><span class="emptyIco">' + icon("users") + '</span><b>No se encontraron colaboradores</b>Prueba con otros términos de búsqueda o filtro.</div>';
+      return html;
+    }
+
+    html += '<div class="list" id="list">';
+    filtered.forEach(function(sub, idx){
+      var isExpanded = st.expandedSubId === sub.id;
+      var activeCount = sub.herramientas_activas || 0;
+      var needsRev = sub.pendientes_revision || 0;
+      var items = sub.items || [];
+
+      html += '<article class="subCard' + (isExpanded ? ' expanded' : '') + '" style="--i:' + idx + '">' +
+        '<div class="subCardHead" data-action="toggle-sub" data-id="' + sub.id + '">' +
+          '<div class="subCardInfo">' +
+            '<div class="subName">' + esc(titleCase(sub.nombre)) + '</div>' +
+            '<div class="subMeta">' + (sub.numero_empleado ? '#' + esc(sub.numero_empleado) + ' · ' : '') + esc(sentenceCase(sub.puesto) || "Operativo") + (sub.area ? ' · ' + esc(titleCase(sub.area)) : '') + '</div>' +
+            '<div class="subPills">' +
+              '<span class="subPill' + (activeCount > 0 ? ' hasTools' : '') + '">' + icon("wrench") + ' ' + activeCount + (activeCount === 1 ? ' herramienta' : ' herramientas') + '</span>' +
+              (needsRev > 0 ? '<span class="subPill needsReview">' + icon("alert") + ' ' + needsRev + ' por auditar</span>' : '') +
+              (lider.puede_ver_costos && sub.valor_resguardos != null && sub.valor_resguardos > 0 ? '<span class="subPill cost">' + fmtMoney(sub.valor_resguardos) + '</span>' : '') +
+            '</div>' +
+          '</div>' +
+          '<button type="button" class="subExpandBtn" aria-label="' + (isExpanded ? 'Contraer' : 'Expandir') + '">' + icon("chevron") + '</button>' +
+        '</div>';
+
+      if(isExpanded){
+        html += '<div class="subDetail">' +
+          '<div class="subDetailTitle">Herramientas asignadas</div>';
+        if(items.length === 0){
+          html += '<p class="hint" style="margin:4px 0 0;">Este colaborador no tiene herramientas activas actualmente.</p>';
+        } else {
+          html += '<div class="subToolsList">';
+          items.forEach(function(item){
+            var condLabel = COND[item.condicion] || item.condicion;
+            var audStateClass = !item.revision_en ? 'pendiente' : (item.revision_resultado || 'pendiente');
+            var audStateLabel = !item.revision_en ? 'Sin auditar' :
+              (item.revision_resultado === 'bueno' ? 'Bueno' :
+               item.revision_resultado === 'danado' ? 'Dañado' :
+               item.revision_resultado === 'no_localizado' ? 'No localizado' : 'Auditado');
+
+            html += '<div class="toolRow">' +
+              '<div class="toolRowTop">' +
+                '<div class="toolNameText">' + esc(item.herramienta) + qty(item) + '</div>' +
+                (lider.puede_ver_costos && item.costo_unitario != null ? '<div class="toolCostText">' + fmtMoney(item.costo_unitario) + ' c/u</div>' : '') +
+              '</div>' +
+              '<div class="toolMetaText">' +
+                'Asignada el ' + fmt(item.fecha_prestamo) +
+                (item.id_articulo ? ' · ID ' + esc(item.id_articulo) : '') +
+                (item.occ ? ' · OCC ' + esc(item.occ) : '') +
+                (condLabel ? ' · ' + esc(condLabel) : '') +
+              '</div>' +
+              '<div class="toolAuditInfo">' +
+                '<div>' +
+                  '<span class="auditState ' + audStateClass + '">' + audStateLabel + '</span>' +
+                  (item.revision_en ? ' <span class="dim" style="font-size:12px;color:var(--label3);margin-left:4px;">(' + fmt(item.revision_en) + (item.revision_nota ? ' · "' + esc(item.revision_nota) + '"' : '') + ')</span>' : '') +
+                '</div>' +
+                '<button type="button" class="btnAudit" data-action="open-audit" data-id="' + item.id + '" data-tool="' + esc(item.herramienta) + '" data-who="' + esc(sub.nombre) + '">' +
+                  icon("clipboard") + ' ' + (item.revision_en ? 'Actualizar auditoría' : 'Auditar') +
+                '</button>' +
+              '</div>' +
+            '</div>';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+
+      html += '</article>';
+    });
+    html += '</div>';
+    return html;
+  }
+
   function pwModalTpl(){
     if(!st.pwModal) return "";
     var m = st.pwModal;
@@ -390,10 +552,49 @@
       '</form></div></div>';
   }
 
+  function auditModalTpl(){
+    if(!st.auditModal) return "";
+    var m = st.auditModal;
+    return '<div class="overlay" data-action="audit-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title">' +
+      '<div class="modalHead"><div>' +
+        '<div class="modalTitle" id="audit-title">Auditar herramienta</div>' +
+        '<p class="modalSub">Colaborador: <b>' + esc(titleCase(m.colaborador)) + '</b></p>' +
+      '</div>' +
+      '<button type="button" class="closeBtn" data-action="close-audit" aria-label="Cerrar">' + icon("x") + '</button></div>' +
+      '<div style="background:var(--surface);border:1px solid var(--sep);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;">' +
+        '<div style="font-size:12.5px;color:var(--label3);font-weight:600;">Herramienta física</div>' +
+        '<div style="font-size:16px;font-weight:700;margin-top:2px;">' + esc(m.herramienta) + '</div>' +
+      '</div>' +
+      '<form id="f-audit" novalidate>' +
+        '<label>Resultado de la inspección física</label>' +
+        '<div class="auditChoices">' +
+          '<label class="auditChoice">' +
+            '<input type="radio" name="audit-res" value="bueno"' + (m.resultado === "bueno" ? ' checked' : '') + '/>' +
+            '<div><span class="auditChoiceTitle" style="color:var(--okInk);">✓ Bueno / Operativo</span><span class="auditChoiceDesc">La herramienta está presente físicamente, en buenas condiciones y operable.</span></div>' +
+          '</label>' +
+          '<label class="auditChoice">' +
+            '<input type="radio" name="audit-res" value="danado"' + (m.resultado === "danado" ? ' checked' : '') + '/>' +
+            '<div><span class="auditChoiceTitle" style="color:var(--warnInk);">⚠ Dañado / Requiere atención</span><span class="auditChoiceDesc">Presente pero requiere reemplazo, reparación o mantenimiento.</span></div>' +
+          '</label>' +
+          '<label class="auditChoice">' +
+            '<input type="radio" name="audit-res" value="no_localizado"' + (m.resultado === "no_localizado" ? ' checked' : '') + '/>' +
+            '<div><span class="auditChoiceTitle" style="color:var(--danger);">✕ No localizado / Faltante</span><span class="auditChoiceDesc">El colaborador no presentó la herramienta durante la inspección.</span></div>' +
+          '</label>' +
+        '</div>' +
+        '<div class="field">' +
+          '<label for="in-audit-nota">Notas de la revisión (opcional)</label>' +
+          '<input type="text" id="in-audit-nota" maxlength="200" placeholder="Ej. Desgaste en mango, serie verificada..." value="' + esc(m.nota || "") + '"/>' +
+        '</div>' +
+        (m.error ? '<p class="errorText" role="alert">' + icon("alert") + '<span>' + esc(m.error) + '</span></p>' : '') +
+        '<button type="submit" class="btnPrimary"' + (m.pending ? ' disabled' : '') + '>' + (m.pending ? 'Guardando auditoría…' : 'Guardar auditoría oficial') + '</button>' +
+      '</form>' +
+    '</div></div>';
+  }
+
   // ---------- Render ----------
   function render(){
     var keep = captureInputs();
-    var html = st.view === "activar" ? activarTpl() : st.view === "nip" ? nipTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() : loginTpl();
+    var html = st.view === "activar" ? activarTpl() : st.view === "nip" ? nipTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() + auditModalTpl() : loginTpl();
     if(st.toast) html += '<div class="toast ' + (st.toast.type === "err" ? "err" : "") + '" role="status"><span class="tIcon">' + icon(st.toast.type === "err" ? "alert" : "check") + '</span>' + esc(st.toast.msg) + '</div>';
     app.innerHTML = html;
     restoreInputs(keep);
@@ -539,11 +740,31 @@
         if(!n.tiene){ openNip("crear", true); return; }                    // sin NIP: se pide antes de entrar
         if(st.recienActivado){ st.recienActivado = false; openNip("cambiar", false, true); return; }
       }
+      loadEquipo(true);
       render();
     }, function(e){
       st.loading = false;
       if(silent && st.data){ return; }
       st.error = e.message; render();
+    });
+  }
+  function loadEquipo(silent){
+    if(!st.token) return;
+    st.equipoLoading = true;
+    call("colab_mi_equipo", { p_token: st.token }).then(function(res){
+      st.equipoLoading = false;
+      if(res && res.ok){
+        st.equipoData = res;
+      } else {
+        st.equipoData = null;
+        if(st.tab === "equipo") st.tab = "activos";
+      }
+      render();
+    }).catch(function(){
+      st.equipoLoading = false;
+      st.equipoData = null;
+      if(st.tab === "equipo") st.tab = "activos";
+      render();
     });
   }
   function openNip(modo, obligatorio, recienActivado){
@@ -645,6 +866,34 @@
     }, function(e){ m.pending = false; m.error = e.message; render(); });
   }
 
+  function submitAudit(){
+    var m = st.auditModal; if(!m || m.pending) return;
+    var nota = (val("in-audit-nota") || "").trim();
+    var checkedRadio = document.querySelector('input[name="audit-res"]:checked');
+    var res = checkedRadio ? checkedRadio.value : m.resultado;
+    if(!res){ m.error = "Elige el resultado de la inspección."; render(); return; }
+    m.pending = true; render();
+    call("colab_registrar_revision", {
+      p_token: st.token,
+      p_resguardo_id: m.resguardoId,
+      p_resultado: res,
+      p_nota: nota
+    }).then(function(r){
+      m.pending = false;
+      if(!r.ok){
+        if(r.error === "sesion"){ st.auditModal = null; sessionEnded(r.mensaje); return; }
+        m.error = r.mensaje || "No se pudo registrar la auditoría."; render(); return;
+      }
+      st.auditModal = null;
+      toast("ok", "Auditoría registrada correctamente.");
+      loadEquipo(true);
+    }, function(e){
+      m.pending = false;
+      m.error = e.message;
+      render();
+    });
+  }
+
   // ---------- Eventos ----------
   document.addEventListener("submit", function(e){
     e.preventDefault();
@@ -652,14 +901,23 @@
     if(id === "f-login") submitLogin();
     else if(id === "f-activar") submitActivar();
     else if(id === "f-pw") submitPw();
+    else if(id === "f-audit") submitAudit();
   });
-  document.addEventListener("input", function(e){ if(e.target && e.target.id === "in-new") updateRules(); touch(); });
+  document.addEventListener("input", function(e){
+    if(e.target && e.target.id === "in-new") updateRules();
+    else if(e.target && e.target.id === "in-search-equipo"){
+      st.equipoQuery = e.target.value;
+      render();
+    }
+    touch();
+  });
   document.addEventListener("click", function(e){
     var el = e.target.closest ? e.target.closest("[data-action]") : null;
     touch();
     if(!el) return;
     var a = el.getAttribute("data-action");
     if(a === "pw-backdrop"){ if(e.target === el && !(st.pwModal && st.pwModal.pending)){ st.pwModal = null; render(); } return; }
+    if(a === "audit-backdrop"){ if(e.target === el && !(st.auditModal && st.auditModal.pending)){ st.auditModal = null; render(); } return; }
     if(a === "eye"){
       var inp = document.getElementById(el.getAttribute("data-for"));
       if(inp){ var show = inp.type === "password"; inp.type = show ? "text" : "password"; el.innerHTML = icon(show ? "eyeOff" : "eye"); el.setAttribute("aria-label", show ? "Ocultar contraseña" : "Mostrar contraseña"); }
@@ -670,6 +928,31 @@
       if(t !== st.tab){ st.tab = t; render(); var l = document.getElementById("list"); if(l && !reduceMotion()) l.classList.add("enter"); }
       return;
     }
+    if(a === "filtro-equipo"){
+      var f = el.getAttribute("data-f");
+      if(f && f !== st.equipoFiltro){ st.equipoFiltro = f; render(); }
+      return;
+    }
+    if(a === "toggle-sub"){
+      var subId = el.getAttribute("data-id");
+      st.expandedSubId = (st.expandedSubId === subId ? null : subId);
+      render();
+      return;
+    }
+    if(a === "open-audit"){
+      st.auditModal = {
+        resguardoId: el.getAttribute("data-id"),
+        herramienta: el.getAttribute("data-tool"),
+        colaborador: el.getAttribute("data-who"),
+        resultado: "bueno",
+        nota: "",
+        pending: false,
+        error: ""
+      };
+      render();
+      return;
+    }
+    if(a === "close-audit"){ st.auditModal = null; render(); return; }
     if(a === "pin"){ nipPress(el.getAttribute("data-k")); return; }
     if(a === "pin-del"){ nipDel(); return; }
     if(a === "open-nip"){ openNip(st.data && st.data.nip && st.data.nip.tiene ? "cambiar" : "crear", false); return; }

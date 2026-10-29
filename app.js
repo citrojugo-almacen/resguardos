@@ -260,7 +260,20 @@
   var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   function okId(row){ return row && UUID_RE.test(String(row.id)); }
   function isoDate(v){ return (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : ""; }
-  function mapEmployee(c){ return { id: String(c.id), numero: String(c.numero_empleado || ""), nombre: String(c.nombre || ""), area: String(c.area || ""), puesto: String(c.puesto || ""), activo: c.activo !== false, nipPendiente: !!c.nip_pendiente, huellaRegistrada: !!c.huella_registrada }; }
+  function mapEmployee(c){
+    return {
+      id: String(c.id),
+      numero: String(c.numero_empleado || ""),
+      nombre: String(c.nombre || ""),
+      area: String(c.area || ""),
+      puesto: String(c.puesto || ""),
+      activo: c.activo !== false,
+      nipPendiente: !!c.nip_pendiente,
+      huellaRegistrada: !!c.huella_registrada,
+      nivelJerarquico: String(c.nivel_jerarquico || "operativo"),
+      puedeAuditar: !!c.puede_auditar
+    };
+  }
   function normNum(s){ return String(s || "").replace(/\s+/g, "").toUpperCase(); }
   function puedeVerCostos(){
     var r = ui.currentUser && ui.currentUser.rol;
@@ -336,7 +349,10 @@
     var toolCols = verCostos ? "id,nombre,id_articulo,costo" : "id,nombre,id_articulo";
     var resCols = verCostos ? (RES_COLS + ",costo_unitario") : RES_COLS;
     return Promise.all([
-      selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada", "nombre.asc,id.asc"),
+      selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada,nivel_jerarquico,puede_auditar", "nombre.asc,id.asc").catch(function(e){
+        if(e.status === 400) return selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada", "nombre.asc,id.asc");
+        throw e;
+      }),
       selectAll("herramientas", toolCols, "nombre.asc,id.asc").catch(function(e){
         if(verCostos && e.status === 400) return selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc");
         throw e;
@@ -1170,15 +1186,28 @@
           '<div class="confirmActions"><button class="confirmYes" data-action="confirm-delete-employee" data-id="'+emp.id+'">Sí, eliminar</button>' +
           '<button class="confirmNo" data-action="cancel-delete-employee">Cancelar</button></div></div>';
       } else {
+        var lvlBadge = '';
+        if(emp.nivelJerarquico && emp.nivelJerarquico !== 'operativo'){
+          var lbl = emp.nivelJerarquico === 'director_general' ? '★ Dir. General' :
+                    emp.nivelJerarquico === 'director' ? 'Director' :
+                    emp.nivelJerarquico === 'gerente' ? 'Gerente' : 'Supervisor';
+          var stColor = emp.nivelJerarquico === 'director_general' ? 'background:var(--brandDeep);color:#fff;' :
+                        emp.nivelJerarquico === 'director' ? 'background:var(--tint);color:#fff;' :
+                        'background:var(--tintSoft);color:var(--tint);';
+          lvlBadge = '<span class="badgeBio" style="' + stColor + '" title="Líder con facultades de auditoría de resguardos">' + esc(lbl) + '</span> ';
+        }
+
         html += '<div class="empCard"><div class="avatar avatarLg '+avatarColorClass(emp.nombre)+'">'+esc(initials(emp.nombre))+'</div>' +
           '<div style="min-width:0;flex:1;"><div class="name">'+esc(emp.nombre)+'</div>' +
             '<div class="area">'+(emp.numero ? '<span class="code">#'+esc(emp.numero)+'</span>' : 'Sin número de empleado')+(emp.area ? ' · '+esc(emp.area) : '')+'</div>' +
             (emp.nipPendiente ? '<div class="area">NIP pendiente · lo crea en su portal o asígnalo con el botón NIP</div>' : '') +
             portalLine(emp) +
             '<div style="margin-top:4px;">' +
+              lvlBadge +
               (emp.huellaRegistrada ? '<span class="badgeBio">'+icon("fingerprint")+' Huella activa</span>' : '<span class="badgeBio none">'+icon("fingerprint")+' Sin huella</span>') +
             '</div></div>' +
           '<button type="button" class="link" data-action="open-enrolar-huella" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Registrar o actualizar huella dactilar en ventanilla">Huella</button>' +
+          (ui.currentUser && ui.currentUser.rol === "admin" ? '<button type="button" class="link" data-action="admin-editar-lider" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Configurar facultades de líder y auditoría">Líder</button>' : '') +
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
           (portalEstado[emp.id] ? '<button type="button" class="link" data-action="reset-portal" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Restablecer el acceso al portal del colaborador">Portal</button>' : '') +
           (activosEmp>0 ? '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>'
@@ -1267,6 +1296,42 @@
       '<p class="hint">El NIP es privado del colaborador; se usará para autorizar cada resguardo. Se guarda cifrado y nadie puede consultarlo.</p>' +
       (ui.empFormError ? '<p class="errorText">'+icon("alert")+' '+esc(ui.empFormError)+'</p>' : '') +
       '<button type="submit" class="btnPrimary" style="margin-top:10px;">Registrar colaborador</button>' +
+    '</form></div>';
+  }
+
+  function liderModalTpl(){
+    if(!ui.liderModal) return "";
+    var m = ui.liderModal;
+    return '<div class="overlay'+overlayEnter+'"><form id="form-lider-modal" class="modal">' +
+      '<div class="modalHead"><div>' +
+        '<div class="modalTitle">Facultades de Líder y Auditoría</div>' +
+        '<p class="modalSub">'+esc(m.nombre)+(m.numero ? ' (#'+esc(m.numero)+')' : '')+'</p>' +
+      '</div>' +
+      '<button type="button" class="closeBtn" data-action="close-lider-modal" aria-label="Cerrar">'+icon("x")+'</button></div>' +
+      '<div class="field"><label for="sel-lider-nivel">Nivel jerárquico</label>' +
+        '<select id="sel-lider-nivel" style="width:100%;height:44px;border-radius:var(--r-sm);border:1px solid var(--sepStrong);background:var(--surface);padding:0 12px;font-size:15px;color:var(--label);">' +
+          '<option value="director_general"'+(m.nivel === "director_general" ? ' selected' : '')+'>★ Director General (Empresa completa + Costos)</option>' +
+          '<option value="director"'+(m.nivel === "director" ? ' selected' : '')+'>Director de Área (Áreas asignadas + Costos)</option>' +
+          '<option value="gerente"'+(m.nivel === "gerente" ? ' selected' : '')+'>Gerente (Departamento sin costos)</option>' +
+          '<option value="supervisor"'+(m.nivel === "supervisor" ? ' selected' : '')+'>Supervisor / Coordinador (Equipo directo sin costos)</option>' +
+        '</select>' +
+      '</div>' +
+      '<div style="margin:16px 0;display:flex;flex-direction:column;gap:12px;">' +
+        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:var(--label);font-weight:600;">' +
+          '<input type="checkbox" id="chk-lider-auditar"'+(m.activo ? ' checked' : '')+' style="width:18px;height:18px;"/>' +
+          '<span>Habilitar auditoría de resguardos en su portal</span>' +
+        '</label>' +
+        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;color:var(--label);font-weight:600;">' +
+          '<input type="checkbox" id="chk-lider-costos"'+(m.puedeVerCostos ? ' checked' : '')+' style="width:18px;height:18px;"/>' +
+          '<span>Permitir visualización de costos monetarios</span>' +
+        '</label>' +
+      '</div>' +
+      '<p class="hint">Los Directores y Dirección General pueden ver costos y capital en resguardo. Para Gerentes y Supervisores la directriz es mantener los costos ocultos.</p>' +
+      (m.error ? '<p class="errorText">'+icon("alert")+' '+esc(m.error)+'</p>' : '') +
+      '<div style="display:flex;gap:10px;margin-top:16px;">' +
+        '<button type="button" class="btnGhost" data-action="close-lider-modal" style="flex:1;">Cancelar</button>' +
+        '<button type="submit" class="btnPrimary" style="flex:1;"'+(m.pending ? ' disabled' : '')+'>'+(m.pending ? 'Guardando…' : 'Guardar facultades')+'</button>' +
+      '</div>' +
     '</form></div>';
   }
 
@@ -1730,7 +1795,7 @@
     var html = '<div class="shell'+(ui.sidebarCollapsed?' collapsed':'')+'"><nav class="sidebar" aria-label="Secciones">' + sidebarTpl() + '</nav>' +
       '<button type="button" class="railLogo" data-action="toggle-sidebar" title="Mostrar barra lateral" aria-label="Mostrar barra lateral"><img src="'+LOGO+'" alt="Citrojugo"/></button>' +
       '<main class="main"><div class="content'+narrow+tabEnter+'">' + pageHeadTpl() + body + '</div></main>' +
-    '</div>' + newEmployeeModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + revisionModalTpl() + printTpl() + enrolarHuellaModalTpl() + toastTpl();
+    '</div>' + newEmployeeModalTpl() + liderModalTpl() + pinPadModalTpl() + employeeToolsModalTpl() + newUserModalTpl() + authModalTpl() + passwordModalTpl() + transferModalTpl() + revisionModalTpl() + printTpl() + enrolarHuellaModalTpl() + toastTpl();
     document.getElementById("app").innerHTML = html;
     if(tabEnter && lastTab !== null) window.scrollTo(0,0);
     lastTab = ui.tab; lastModalKey = mk; lastPinLen = ui.pinFlow ? ui.pinFlow.pin.length : 0;
@@ -1827,6 +1892,30 @@
       ui.busy = false;
       ui.empForm.pin = ""; ui.empForm.pin2 = "";
       ui.empFormError = e.message; render();
+    });
+  }
+
+  function submitLiderModal(){
+    var m = ui.liderModal; if(!m || m.pending) return;
+    var nivel = (document.getElementById("sel-lider-nivel") || {}).value || "supervisor";
+    var auditar = !!((document.getElementById("chk-lider-auditar") || {}).checked);
+    var costos = !!((document.getElementById("chk-lider-costos") || {}).checked);
+    m.pending = true; render();
+    rpc("admin_actualizar_lider", {
+      p_colaborador_id: m.colaboradorId,
+      p_nivel: nivel,
+      p_activo: auditar,
+      p_puede_ver_costos: costos,
+      p_alcance_tipo: "automatico",
+      p_areas: []
+    }).then(function(r){
+      ui.liderModal = null;
+      toast("ok", "Facultades de líder actualizadas.");
+      loadData({ silent: true });
+    }).catch(function(err){
+      m.pending = false;
+      m.error = err.message;
+      render();
     });
   }
 
@@ -2390,6 +2479,24 @@
           ui.empForm = {numero:"",nombre:"",pin:"",pin2:""}; ui.empFormError="";
           ui.showNewEmployeeModal = true; render(); break;
         case "close-new-employee": ui.showNewEmployeeModal = false; render(); break;
+        case "admin-editar-lider": {
+          var empToEdit = employees.find(function(e){ return e.id === id; });
+          if(empToEdit){
+            ui.liderModal = {
+              colaboradorId: empToEdit.id,
+              nombre: empToEdit.nombre,
+              numero: empToEdit.numero,
+              nivel: (empToEdit.nivelJerarquico && empToEdit.nivelJerarquico !== 'operativo') ? empToEdit.nivelJerarquico : 'supervisor',
+              activo: empToEdit.puedeAuditar !== false,
+              puedeVerCostos: empToEdit.nivelJerarquico === 'director_general' || empToEdit.nivelJerarquico === 'director',
+              pending: false,
+              error: ""
+            };
+            render();
+          }
+          break;
+        }
+        case "close-lider-modal": ui.liderModal = null; render(); break;
         case "request-delete-employee": ui.confirmDeleteEmpId = id; render(); break;
         case "cancel-delete-employee": ui.confirmDeleteEmpId = null; render(); break;
         case "confirm-delete-employee": {
@@ -2613,6 +2720,7 @@
     else if(e.target.id === "form-auth") submitAuth();
     else if(e.target.id === "form-password") submitPassword();
     else if(e.target.id === "form-new-employee") submitNewEmployee();
+    else if(e.target.id === "form-lider-modal") submitLiderModal();
     else if(e.target.id === "form-new-tool") submitNewTool();
     else if(e.target.id === "form-new-resguardo") submitNewResguardo();
   });
