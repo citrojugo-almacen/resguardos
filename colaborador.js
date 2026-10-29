@@ -333,7 +333,7 @@
           '<div class="fact"><small>Departamento</small><b title="' + esc(sentenceCase(p.area)) + '">' + esc(sentenceCase(p.area) || "—") + '</b></div>' +
           '<div class="fact"><small>Localidad</small><b>' + esc(titleCase(p.localidad) || "—") + '</b></div>' +
         '</div>' +
-        '<div class="badgeLock">' + icon("lock") + '<span>Datos oficiales de la empresa. Si algo no es correcto, avisa en Recursos Humanos.' +
+        '<div class="badgeLock">' + icon("lock") + '<span>Datos oficiales de la empresa. Si algo no es correcto, avisa en el departamento de Almacén.' +
           (p.activado_en ? ' Creaste tu contraseña el ' + fmt(p.activado_en) + '.' : '') + '</span></div>' +
       '</section></div>';
 
