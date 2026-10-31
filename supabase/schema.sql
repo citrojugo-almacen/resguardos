@@ -177,14 +177,30 @@ create table if not exists app.portal_lider (
 );
 alter table app.portal_lider enable row level security;
 
--- Personal asignado a cada líder para auditoría
+-- Personal asignado a cada líder para auditoría y supervisión de resguardos
 create table if not exists app.lider_subordinado (
   lider_id       uuid not null references public.colaboradores (id) on delete cascade,
   subordinado_id uuid not null references public.colaboradores (id) on delete cascade,
+  estado         text not null default 'pendiente' check (estado in ('pendiente', 'aceptada', 'rechazada')),
   agregado_en    timestamptz not null default now(),
+  respondido_en  timestamptz,
   primary key (lider_id, subordinado_id)
 );
+alter table app.lider_subordinado add column if not exists estado text not null default 'pendiente';
+alter table app.lider_subordinado add column if not exists respondido_en timestamptz;
 alter table app.lider_subordinado enable row level security;
+
+-- Solicitudes de colaboradores para solicitar ser líderes ante Almacén / Admin
+create table if not exists app.solicitud_liderazgo (
+  id             uuid primary key default gen_random_uuid(),
+  colaborador_id uuid not null references public.colaboradores (id) on delete cascade,
+  motivo         text not null default '',
+  estado         text not null default 'pendiente' check (estado in ('pendiente', 'aprobada', 'rechazada')),
+  creado_en      timestamptz not null default now(),
+  atendido_en    timestamptz,
+  atendido_por   uuid references auth.users(id)
+);
+alter table app.solicitud_liderazgo enable row level security;
 
 create table if not exists public.herramientas (
   id           uuid primary key default gen_random_uuid(),
@@ -353,6 +369,55 @@ returns void language sql volatile security definer set search_path = '' as $$
   values (auth.uid(), coalesce(app.nombre_actual(), ''), p_accion, coalesce(p_entidad, ''), p_entidad_id, coalesce(p_detalle, '{}'::jsonb));
 $$;
 
+-- Peso jerárquico numérico (menor número = mayor jerarquía en organigrama)
+create or replace function app.nivel_peso(p_nivel text)
+returns int language sql immutable parallel safe set search_path = '' as $$
+  select case coalesce(p_nivel, 'operativo')
+    when 'director_general' then 1
+    when 'director'         then 2
+    when 'gerente'          then 3
+    when 'supervisor'       then 4
+    when 'operativo'        then 5
+    else 99
+  end;
+$$;
+
+-- Validación criptográfica con HMAC-SHA256 de token de huella emitido por el servicio local de ventanilla
+create or replace function app.validar_token_huella(p_colaborador_id uuid, p_token text)
+returns jsonb language plpgsql stable security definer set search_path = '' as $$
+declare
+  v_parts      text[];
+  v_token_ts   bigint;
+  v_ahora_ts   bigint;
+  v_firma_calc text;
+begin
+  if p_token is null or p_token !~ '^HUELLA-[0-9]{9,12}-[a-f0-9]{16,64}$' then
+    perform app.log('huella_token_invalido', 'colaborador', p_colaborador_id::text, jsonb_build_object('token', coalesce(p_token, '')));
+    return jsonb_build_object('ok', false, 'error', 'huella_invalida', 'mensaje', 'Token biométrico no válido o estructura alterada.');
+  end if;
+
+  v_parts := string_to_array(p_token, '-');
+  v_token_ts := (v_parts[2])::bigint;
+  v_ahora_ts := extract(epoch from now())::bigint;
+
+  -- Tolerancia máxima de 120 segundos para evitar reuso y desfases de reloj
+  if abs(v_ahora_ts - v_token_ts) > 120 then
+    perform app.log('huella_token_expirado', 'colaborador', p_colaborador_id::text,
+      jsonb_build_object('ts_token', v_token_ts, 'ts_actual', v_ahora_ts));
+    return jsonb_build_object('ok', false, 'error', 'huella_expirada',
+      'mensaje', 'La captura de huella dactilar ha expirado. Vuelve a escanear en el lector.');
+  end if;
+
+  -- HMAC SHA-256 verificado contra el identificador de colaborador y el secreto del servicio local
+  v_firma_calc := encode(extensions.hmac(p_colaborador_id::text || ':' || v_parts[2], 'citrojugo-almacen-biometria-2026-segura', 'sha256'), 'hex');
+  if left(v_firma_calc, length(v_parts[3])) is distinct from v_parts[3] then
+    perform app.log('huella_firma_rechazada', 'colaborador', p_colaborador_id::text, jsonb_build_object('token', p_token));
+    return jsonb_build_object('ok', false, 'error', 'huella_invalida', 'mensaje', 'Firma de autorización biométrica no válida.');
+  end if;
+
+  return jsonb_build_object('ok', true);
+end $$;
+
 create or replace function app.resguardo_json(r public.resguardos)
 returns jsonb language plpgsql stable set search_path = '' as $$
 declare
@@ -509,12 +574,19 @@ begin
   end if;
   v_min := null;
 
-  -- 3) Verificación de identidad (Huella biométrica o NIP con bloqueo)
+  -- 3) Verificación de identidad (Huella biométrica con firma o NIP con bloqueo)
   if p_nip like 'HUELLA-%' then
     if not v_col.huella_registrada then
       return jsonb_build_object('ok', false, 'error', 'sin_huella',
         'mensaje', 'Este colaborador no tiene huella registrada en almacén. Autoriza con NIP.');
     end if;
+    declare
+      v_bio_check jsonb := app.validar_token_huella(p_colaborador_id, p_nip);
+    begin
+      if not coalesce((v_bio_check ->> 'ok')::boolean, false) then
+        return v_bio_check;
+      end if;
+    end;
   else
     select * into v_nip from app.colaborador_nip where colaborador_id = p_colaborador_id for update;
     if not found then
@@ -1656,12 +1728,42 @@ begin
       'bloqueado_hasta', case when v_n.bloqueado_hasta > now() then v_n.bloqueado_hasta end),
     'perfil', jsonb_build_object('nombre', v_col.nombre, 'numero_empleado', v_col.numero_empleado,
                                  'puesto', v_col.puesto, 'area', v_col.area, 'localidad', v_col.localidad,
-                                 'activado_en', v_c.activado_en, 'ultimo_acceso', v_c.ultimo_acceso),
+                                 'activado_en', v_c.activado_en, 'ultimo_acceso', v_c.ultimo_acceso,
+                                 'es_lider', coalesce(v_col.puede_auditar, false),
+                                 'nivel_jerarquico', coalesce(v_col.nivel_jerarquico, 'operativo'),
+                                 'solicitud_liderazgo_pendiente', exists (select 1 from app.solicitud_liderazgo where colaborador_id = v_id and estado = 'pendiente')),
+    'solicitudes_pendientes', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'lider_id', ls.lider_id,
+        'lider_nombre', l.nombre,
+        'lider_puesto', l.puesto,
+        'lider_area', l.area,
+        'lider_numero', l.numero_empleado,
+        'solicitado_en', ls.agregado_en
+      ) order by ls.agregado_en desc)
+      from app.lider_subordinado ls
+      join public.colaboradores l on l.id = ls.lider_id
+      where ls.subordinado_id = v_id and ls.estado = 'pendiente' and l.activo
+    ), '[]'::jsonb),
+    'lideres_asignados', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'lider_id', ls.lider_id,
+        'lider_nombre', l.nombre,
+        'lider_puesto', l.puesto,
+        'lider_area', l.area,
+        'lider_numero', l.numero_empleado,
+        'autorizado_en', ls.respondido_en
+      ) order by ls.respondido_en desc nulls last)
+      from app.lider_subordinado ls
+      join public.colaboradores l on l.id = ls.lider_id
+      where ls.subordinado_id = v_id and ls.estado = 'aceptada' and l.activo
+    ), '[]'::jsonb),
     'resguardos', coalesce((select jsonb_agg(jsonb_build_object(
         'id', r.id, 'herramienta', r.herramienta, 'cantidad', r.cantidad, 'occ', r.occ, 'id_articulo', r.id_articulo,
         'fecha_prestamo', r.fecha_prestamo, 'fecha_devolucion', r.fecha_devolucion, 'estado', r.estado,
         'notas', r.notas, 'entrego', r.creado_por, 'recibio', r.devuelto_por, 'creado_en', r.creado_en,
-        'condicion', r.condicion)
+        'condicion', r.condicion,
+        'revision_en', r.revision_en, 'revision_resultado', r.revision_resultado, 'revision_nota', r.revision_nota, 'revision_por', r.revision_por)
         order by r.estado, coalesce(r.fecha_devolucion, r.fecha_prestamo) desc, r.creado_en desc)
       from public.resguardos r where r.colaborador_id = v_id), '[]'::jsonb));
 end $$;
@@ -1812,8 +1914,31 @@ begin
       from app.portal_cuenta c join public.colaboradores k on k.id = c.colaborador_id and k.activo;
 end $$;
 
--- 8) (Portal del colaborador) Agregar subordinado por número de empleado
-create or replace function public.colab_agregar_subordinado(
+-- 8) (Portal del colaborador) Solicitar ser líder ante Almacén/Administración
+create or replace function public.colab_solicitar_liderazgo(p_token text, p_motivo text default '')
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id  uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_col public.colaboradores%rowtype;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+  select * into v_col from public.colaboradores where id = v_id;
+  if v_col.puede_auditar then
+    return jsonb_build_object('ok', false, 'error', 'ya_lider', 'mensaje', 'Tu cuenta ya cuenta con facultades activas de líder.');
+  end if;
+  if exists (select 1 from app.solicitud_liderazgo where colaborador_id = v_id and estado = 'pendiente') then
+    return jsonb_build_object('ok', false, 'error', 'ya_solicitado', 'mensaje', 'Ya tienes una solicitud de liderazgo pendiente de aprobación por el área de Almacén.');
+  end if;
+  insert into app.solicitud_liderazgo (colaborador_id, motivo)
+  values (v_id, btrim(coalesce(p_motivo, '')));
+  perform app.log('solicitud_liderazgo_creada', 'colaborador', v_id::text, jsonb_build_object('colaborador', v_col.nombre, 'puesto', v_col.puesto));
+  return jsonb_build_object('ok', true, 'mensaje', 'Solicitud enviada al área de Almacén. Te notificaremos cuando sea aprobada.');
+end $$;
+
+-- 9) (Portal del colaborador) Enviar solicitud de supervisión a un subordinado por número de nómina
+create or replace function public.colab_solicitar_subordinado(
   p_token text,
   p_numero_empleado text
 ) returns jsonb language plpgsql volatile security definer set search_path = '' as $$
@@ -1832,7 +1957,7 @@ begin
   select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
 
   if v_lider.colaborador_id is null or not v_col.puede_auditar then
-    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'No tienes facultades asignadas de líder o auditoría.');
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'No tienes facultades asignadas de líder.');
   end if;
 
   if v_num is null or v_num = '' then
@@ -1845,17 +1970,30 @@ begin
   end if;
 
   if v_sub.id = v_id then
-    return jsonb_build_object('ok', false, 'error', 'mismo_usuario', 'mensaje', 'No puedes agregarte a ti mismo como personal a cargo.');
+    return jsonb_build_object('ok', false, 'error', 'mismo_usuario', 'mensaje', 'No puedes solicitarte a ti mismo como personal a cargo.');
   end if;
 
-  if exists (select 1 from app.lider_subordinado where lider_id = v_id and subordinado_id = v_sub.id) then
-    return jsonb_build_object('ok', false, 'error', 'ya_asignado', 'mensaje', v_sub.nombre || ' ya está en tu lista de personal.');
+  -- Regla jerárquica: no se puede enviar solicitud a colaboradores de igual o mayor jerarquía
+  if app.nivel_peso(v_sub.nivel_jerarquico) <= app.nivel_peso(v_lider.nivel) then
+    return jsonb_build_object('ok', false, 'error', 'jerarquia_invalida',
+      'mensaje', 'No puedes solicitar autorización a un colaborador con rango jerárquico igual o superior al tuyo (' || v_sub.puesto || ').');
   end if;
 
-  insert into app.lider_subordinado (lider_id, subordinado_id)
-  values (v_id, v_sub.id);
+  if exists (select 1 from app.lider_subordinado where lider_id = v_id and subordinado_id = v_sub.id and estado = 'aceptada') then
+    return jsonb_build_object('ok', false, 'error', 'ya_asignado', 'mensaje', v_sub.nombre || ' ya está autorizado en tu equipo.');
+  end if;
 
-  perform app.log('lider_agrego_subordinado', 'colaborador', v_sub.id::text,
+  if exists (select 1 from app.lider_subordinado where lider_id = v_id and subordinado_id = v_sub.id and estado = 'pendiente') then
+    return jsonb_build_object('ok', false, 'error', 'pendiente_confirmacion',
+      'mensaje', 'Ya enviaste una solicitud a ' || v_sub.nombre || '. El colaborador debe aceptarla desde su portal.');
+  end if;
+
+  insert into app.lider_subordinado (lider_id, subordinado_id, estado, agregado_en)
+  values (v_id, v_sub.id, 'pendiente', now())
+  on conflict (lider_id, subordinado_id) do update
+    set estado = 'pendiente', agregado_en = now(), respondido_en = null;
+
+  perform app.log('lider_solicito_subordinado', 'colaborador', v_sub.id::text,
     jsonb_build_object(
       'lider', v_col.nombre,
       'subordinado', v_sub.nombre,
@@ -1864,7 +2002,7 @@ begin
 
   return jsonb_build_object(
     'ok', true,
-    'mensaje', 'Colaborador ' || v_sub.nombre || ' agregado a tu equipo.',
+    'mensaje', 'Solicitud de supervisión enviada a ' || v_sub.nombre || '. En cuanto acepte en su portal podrás consultar sus herramientas en resguardo.',
     'subordinado', jsonb_build_object(
       'id', v_sub.id,
       'nombre', v_sub.nombre,
@@ -1875,7 +2013,49 @@ begin
   );
 end $$;
 
--- 9) (Portal del colaborador) Remover subordinado de la lista personal
+-- 10) (Portal del colaborador) Responder a una solicitud de supervisión de un líder
+create or replace function public.colab_responder_solicitud_lider(
+  p_token text,
+  p_lider_id uuid,
+  p_aceptar boolean
+) returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id         uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_col        public.colaboradores%rowtype;
+  v_lider      public.colaboradores%rowtype;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+
+  select * into v_col from public.colaboradores where id = v_id;
+  select * into v_lider from public.colaboradores where id = p_lider_id;
+
+  if not exists (select 1 from app.lider_subordinado where lider_id = p_lider_id and subordinado_id = v_id and estado = 'pendiente') then
+    return jsonb_build_object('ok', false, 'error', 'no_encontrada', 'mensaje', 'No hay ninguna solicitud pendiente de ese líder.');
+  end if;
+
+  if p_aceptar then
+    update app.lider_subordinado
+       set estado = 'aceptada', respondido_en = now()
+     where lider_id = p_lider_id and subordinado_id = v_id;
+
+    perform app.log('colaborador_acepto_lider', 'colaborador', v_id::text,
+      jsonb_build_object('colaborador', v_col.nombre, 'lider', v_lider.nombre));
+
+    return jsonb_build_object('ok', true, 'mensaje', 'Has autorizado a ' || v_lider.nombre || ' para supervisar tus resguardos.');
+  else
+    delete from app.lider_subordinado
+     where lider_id = p_lider_id and subordinado_id = v_id;
+
+    perform app.log('colaborador_rechazo_lider', 'colaborador', v_id::text,
+      jsonb_build_object('colaborador', v_col.nombre, 'lider', v_lider.nombre));
+
+    return jsonb_build_object('ok', true, 'mensaje', 'Solicitud rechazada.');
+  end if;
+end $$;
+
+-- 11) (Portal del colaborador) Remover subordinado directo de la lista personal
 create or replace function public.colab_remover_subordinado(
   p_token text,
   p_subordinado_id uuid
@@ -1898,7 +2078,7 @@ begin
   get diagnostics v_borrados = row_count;
 
   if v_borrados = 0 then
-    return jsonb_build_object('ok', false, 'error', 'no_encontrado', 'mensaje', 'Ese colaborador no está en tu lista.');
+    return jsonb_build_object('ok', false, 'error', 'no_encontrado', 'mensaje', 'Ese colaborador no está en tu lista de subordinados directos.');
   end if;
 
   perform app.log('lider_removio_subordinado', 'colaborador', p_subordinado_id::text,
@@ -1907,10 +2087,10 @@ begin
       'subordinado', v_sub.nombre
     ));
 
-  return jsonb_build_object('ok', true, 'mensaje', 'Colaborador removido de tu lista de personal.');
+  return jsonb_build_object('ok', true, 'mensaje', 'Colaborador removido de tu lista.');
 end $$;
 
--- 10) (Portal del colaborador) Mi equipo subordinado para auditoría piramidal
+-- 12) (Portal del colaborador) Mi equipo subordinado con cascada jerárquica recursiva
 create or replace function public.colab_mi_equipo(p_token text)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
 declare
@@ -1927,17 +2107,44 @@ begin
   select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
   
   if v_lider.colaborador_id is null or not v_col.puede_auditar then
-    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'No tienes facultades asignadas de auditoría o personal a cargo.');
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'No tienes facultades asignadas de líder.');
   end if;
 
   update app.portal_lider set ultimo_acceso_auditoria = now() where colaborador_id = v_id;
 
-  with subordinados as (
-    select c.id, c.nombre, c.numero_empleado, c.puesto, c.area, c.localidad, ls.agregado_en
-      from public.colaboradores c
-      join app.lider_subordinado ls on ls.subordinado_id = c.id
-     where ls.lider_id = v_id
-       and c.activo
+  with recursive jerarquia as (
+    -- Subordinados directos que aceptaron la solicitud
+    select 
+      ls.subordinado_id,
+      1 as nivel_profundidad,
+      ls.lider_id as supervisor_directo_id,
+      true as es_directo
+    from app.lider_subordinado ls
+    where ls.lider_id = v_id and ls.estado = 'aceptada'
+
+    union
+
+    -- Cascada recursiva: subordinados de líderes subordinados
+    select 
+      ls_hijo.subordinado_id,
+      j.nivel_profundidad + 1 as nivel_profundidad,
+      ls_hijo.lider_id as supervisor_directo_id,
+      false as es_directo
+    from app.lider_subordinado ls_hijo
+    join jerarquia j on j.subordinado_id = ls_hijo.lider_id
+    where ls_hijo.estado = 'aceptada'
+  ),
+  subordinados_unicos as (
+    select distinct on (c.id)
+      c.id, c.nombre, c.numero_empleado, c.puesto, c.area, c.localidad,
+      j.nivel_profundidad,
+      j.es_directo,
+      sup.nombre as supervisor_directo_nombre
+    from jerarquia j
+    join public.colaboradores c on c.id = j.subordinado_id
+    left join public.colaboradores sup on sup.id = j.supervisor_directo_id
+    where c.activo
+    order by c.id, j.nivel_profundidad asc
   ),
   resguardos_agg as (
     select 
@@ -1957,12 +2164,21 @@ begin
           'revision_en', r.revision_en,
           'revision_resultado', r.revision_resultado,
           'revision_nota', r.revision_nota,
+          'revision_por', r.revision_por,
           'costo_unitario', case when v_lider.puede_ver_costos then r.costo_unitario else null end
         ) order by r.fecha_prestamo desc
       ) filter (where r.estado = 'activo'), '[]'::jsonb) as items
     from public.resguardos r
-    where r.colaborador_id in (select id from subordinados)
+    where r.colaborador_id in (select id from subordinados_unicos)
     group by r.colaborador_id
+  ),
+  pendientes as (
+    select 
+      c.id, c.nombre, c.numero_empleado, c.puesto, c.area, ls.agregado_en as solicitado_en
+    from app.lider_subordinado ls
+    join public.colaboradores c on c.id = ls.subordinado_id
+    where ls.lider_id = v_id and ls.estado = 'pendiente' and c.activo
+    order by ls.agregado_en desc
   )
   select jsonb_build_object(
     'ok', true,
@@ -1974,7 +2190,7 @@ begin
       'es_director', v_lider.nivel in ('director_general', 'director')
     ),
     'resumen', jsonb_build_object(
-      'total_colaboradores', (select count(*) from subordinados),
+      'total_colaboradores', (select count(*) from subordinados_unicos),
       'con_herramienta', (select count(distinct colaborador_id) from resguardos_agg where total_activas > 0),
       'total_herramientas', (select coalesce(sum(total_activas), 0) from resguardos_agg),
       'pendientes_revision', (select coalesce(sum(pendientes_revision), 0) from resguardos_agg),
@@ -1988,13 +2204,28 @@ begin
           'numero_empleado', s.numero_empleado,
           'puesto', s.puesto,
           'area', s.area,
+          'es_directo', s.es_directo,
+          'supervisor_directo', s.supervisor_directo_nombre,
+          'profundidad', s.nivel_profundidad,
           'herramientas_activas', coalesce(ra.total_activas, 0),
           'pendientes_revision', coalesce(ra.pendientes_revision, 0),
           'valor_resguardos', case when v_lider.puede_ver_costos then coalesce(ra.valor_resguardos, 0) else null end,
           'items', coalesce(ra.items, '[]'::jsonb)
-        ) order by coalesce(ra.total_activas, 0) desc, s.nombre asc
-      ) from subordinados s
+        ) order by s.es_directo desc, coalesce(ra.total_activas, 0) desc, s.nombre asc
+      ) from subordinados_unicos s
       left join resguardos_agg ra on ra.colaborador_id = s.id
+    ), '[]'::jsonb),
+    'pendientes_confirmacion', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'id', p.id,
+          'nombre', p.nombre,
+          'numero_empleado', p.numero_empleado,
+          'puesto', p.puesto,
+          'area', p.area,
+          'solicitado_en', p.solicitado_en
+        )
+      ) from pendientes p
     ), '[]'::jsonb)
   ) into v_res;
 
@@ -2089,109 +2320,74 @@ begin
   return v_res;
 end $$;
 
--- 12) (Portal del colaborador) Registrar auditoría de resguardo por líder
-create or replace function public.colab_registrar_revision(
-  p_token text,
-  p_resguardo_id uuid,
-  p_resultado text,
-  p_nota text default ''
-) returns jsonb language plpgsql volatile security definer set search_path = '' as $$
-declare
-  v_id         uuid := app.portal_sesion_valida(p_token, 'activa');
-  v_col        public.colaboradores%rowtype;
-  v_lider      app.portal_lider%rowtype;
-  v_r          public.resguardos%rowtype;
-  v_target_col public.colaboradores%rowtype;
-  v_resultado  text := btrim(coalesce(p_resultado, ''));
-  v_nota       text := btrim(coalesce(p_nota, ''));
+-- 12) (Almacén - Admin/Supervisor) Obtener costos unitarios protegidos para inventario y resguardos
+create or replace function public.obtener_costos_almacen()
+returns jsonb language plpgsql stable security definer set search_path = '' as $$
 begin
-  if v_id is null then
-    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
-  end if;
-
-  select * into v_col from public.colaboradores where id = v_id;
-  select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
-  
-  if v_lider.colaborador_id is null or not v_col.puede_auditar then
-    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'No tienes permisos de auditoría.');
-  end if;
-
-  if v_resultado not in ('bueno', 'danado', 'no_localizado') then
-    raise exception using errcode = '22023', message = 'Elige un resultado válido: bueno, danado o no_localizado.';
-  end if;
-
-  select * into v_r from public.resguardos where id = p_resguardo_id for update;
-  if not found or v_r.estado <> 'activo' then
-    return jsonb_build_object('ok', false, 'error', 'resguardo_invalido', 'mensaje', 'Ese resguardo no está activo.');
-  end if;
-
-  select * into v_target_col from public.colaboradores where id = v_r.colaborador_id;
-
-  -- Comprueba que pertenezca a su lista asignada (los Directores pueden auditar a cualquiera)
-  if v_lider.nivel not in ('director_general', 'director') then
-    if not exists (select 1 from app.lider_subordinado where lider_id = v_id and subordinado_id = v_target_col.id) then
-      return jsonb_build_object('ok', false, 'error', 'fuera_de_jurisdiccion', 'mensaje', 'Ese colaborador no está en tu lista de personal asignado.');
-    end if;
-  end if;
-
-  update public.resguardos
-     set revision_en = now(),
-         revision_resultado = v_resultado,
-         revision_por = v_col.nombre || ' (' || v_col.puesto || ')',
-         revision_nota = v_nota,
-         actualizado_en = now()
-   where id = p_resguardo_id
-  returning * into v_r;
-
-  perform app.log('revision_campo_lider', 'resguardo', v_r.id::text,
-    jsonb_build_object(
-      'lider', v_col.nombre,
-      'puesto_lider', v_col.puesto,
-      'colaborador', v_target_col.nombre,
-      'herramienta', v_r.herramienta,
-      'resultado', v_resultado,
-      'nota', v_nota
-    ));
-
-  return jsonb_build_object('ok', true, 'mensaje', 'Auditoría registrada correctamente.', 'resguardo', app.resguardo_json(v_r));
+  perform app.exigir(array['admin', 'supervisor']);
+  return jsonb_build_object(
+    'ok', true,
+    'herramientas', coalesce((select jsonb_object_agg(id, costo) from public.herramientas where costo > 0), '{}'::jsonb),
+    'resguardos', coalesce((select jsonb_object_agg(id, costo_unitario) from public.resguardos where costo_unitario > 0), '{}'::jsonb)
+  );
 end $$;
 
--- 10) (Almacén - Admin) Listar líderes y su configuración de auditoría
+-- 13) (Almacén - Admin) Listar líderes, facultades y solicitudes pendientes de liderazgo
 create or replace function public.admin_listar_lideres()
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
 begin
   perform app.exigir(array['admin', 'supervisor']);
-  return coalesce((
-    select jsonb_agg(
-      jsonb_build_object(
-        'id', c.id,
-        'nombre', c.nombre,
-        'numero_empleado', c.numero_empleado,
-        'puesto', c.puesto,
-        'area', c.area,
-        'nivel', coalesce(pl.nivel, c.nivel_jerarquico),
-        'puede_ver_costos', coalesce(pl.puede_ver_costos, false),
-        'activo', coalesce(pl.activo, false),
-        'alcance_tipo', coalesce(pl.alcance_tipo, 'automatico'),
-        'areas', coalesce(pl.areas, '{}'::text[]),
-        'invitado_en', pl.invitado_en,
-        'ultimo_acceso_auditoria', pl.ultimo_acceso_auditoria
-      ) order by 
-        case coalesce(pl.nivel, c.nivel_jerarquico)
-          when 'director_general' then 1
-          when 'director' then 2
-          when 'gerente' then 3
-          when 'supervisor' then 4
-          else 5
-        end, c.nombre asc
-    )
-    from public.colaboradores c
-    left join app.portal_lider pl on pl.colaborador_id = c.id
-    where c.activo and (c.puede_auditar or pl.colaborador_id is not null)
-  ), '[]'::jsonb);
+  return jsonb_build_object(
+    'ok', true,
+    'lideres', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'id', c.id,
+          'nombre', c.nombre,
+          'numero_empleado', c.numero_empleado,
+          'puesto', c.puesto,
+          'area', c.area,
+          'nivel', coalesce(pl.nivel, c.nivel_jerarquico),
+          'puede_ver_costos', coalesce(pl.puede_ver_costos, false),
+          'activo', coalesce(pl.activo, false),
+          'alcance_tipo', coalesce(pl.alcance_tipo, 'automatico'),
+          'areas', coalesce(pl.areas, '{}'::text[]),
+          'invitado_en', pl.invitado_en,
+          'ultimo_acceso_auditoria', pl.ultimo_acceso_auditoria
+        ) order by 
+          case coalesce(pl.nivel, c.nivel_jerarquico)
+            when 'director_general' then 1
+            when 'director' then 2
+            when 'gerente' then 3
+            when 'supervisor' then 4
+            else 5
+          end, c.nombre asc
+      )
+      from public.colaboradores c
+      left join app.portal_lider pl on pl.colaborador_id = c.id
+      where c.activo and (c.puede_auditar or pl.colaborador_id is not null)
+    ), '[]'::jsonb),
+    'solicitudes_pendientes', coalesce((
+      select jsonb_agg(
+        jsonb_build_object(
+          'solicitud_id', sl.id,
+          'colaborador_id', c.id,
+          'nombre', c.nombre,
+          'numero_empleado', c.numero_empleado,
+          'puesto', c.puesto,
+          'area', c.area,
+          'motivo', sl.motivo,
+          'creado_en', sl.creado_en
+        ) order by sl.creado_en desc
+      )
+      from app.solicitud_liderazgo sl
+      join public.colaboradores c on c.id = sl.colaborador_id
+      where sl.estado = 'pendiente' and c.activo
+    ), '[]'::jsonb)
+  );
 end $$;
 
--- 11) (Almacén - Admin) Configurar facultades de líder y alcance
+-- 14) (Almacén - Admin) Configurar facultades de líder y alcance
 create or replace function public.admin_actualizar_lider(
   p_colaborador_id uuid,
   p_nivel text,
@@ -2203,7 +2399,7 @@ create or replace function public.admin_actualizar_lider(
 declare
   v_col public.colaboradores%rowtype;
 begin
-  perform app.exigir(array['admin']);
+  perform app.exigir(array['admin', 'supervisor']);
   
   if p_nivel not in ('director_general', 'director', 'gerente', 'supervisor') then
     raise exception using errcode = '22023', message = 'Nivel jerárquico no válido.';
@@ -2228,6 +2424,13 @@ begin
       puede_ver_costos = p_puede_ver_costos,
       activo = p_activo;
 
+  -- Si tenía solicitud pendiente, marcarla como atendida
+  update app.solicitud_liderazgo
+     set estado = case when p_activo then 'aprobada' else 'rechazada' end,
+         atendido_en = now(),
+         atendido_por = auth.uid()
+   where colaborador_id = p_colaborador_id and estado = 'pendiente';
+
   perform app.log('lider_actualizado', 'colaborador', p_colaborador_id::text,
     jsonb_build_object(
       'colaborador', v_col.nombre,
@@ -2237,7 +2440,7 @@ begin
       'alcance_tipo', p_alcance_tipo
     ));
 
-  return jsonb_build_object('ok', true, 'mensaje', 'Líder configurado exitosamente.');
+  return jsonb_build_object('ok', true, 'mensaje', 'Facultades de líder configuradas exitosamente.');
 end $$;
 
 -- =====================================================================
@@ -2283,7 +2486,13 @@ revoke all on public.perfiles, public.colaboradores, public.herramientas, public
   from public, anon, authenticated;
 grant select on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora, public.constancias
   to authenticated;
-revoke all on app.colaborador_nip, app.ajustes from public, anon, authenticated;
+
+-- Blindaje de costos (Bug 3): se revoca SELECT sobre las columnas económicas para authenticated.
+-- Solo se pueden consultar mediante la RPC protegida public.obtener_costos_almacen()
+revoke select (costo) on public.herramientas from authenticated;
+revoke select (costo_unitario) on public.resguardos from authenticated;
+
+revoke all on app.colaborador_nip, app.ajustes, app.lider_subordinado, app.solicitud_liderazgo, app.portal_lider, app.colaborador_huella from public, anon, authenticated;
 
 do $$
 declare f record;
@@ -2315,6 +2524,7 @@ grant execute on function
   public.editar_fecha_prestamo(uuid, date),
   public.agregar_herramienta(text, text, numeric),
   public.actualizar_costo_herramienta(uuid, numeric),
+  public.obtener_costos_almacen(),
   public.eliminar_herramienta(uuid),
   public.admin_actualizar_usuario(uuid, text, boolean),
   public.admin_listar_lideres(),
@@ -2332,11 +2542,12 @@ grant execute on function
   public.colab_login(text, text),
   public.colab_activar(text, text, text),
   public.colab_mis_resguardos(text),
-  public.colab_mi_equipo(text),
-  public.colab_agregar_subordinado(text, text),
+  public.colab_solicitar_liderazgo(text, text),
+  public.colab_solicitar_subordinado(text, text),
+  public.colab_responder_solicitud_lider(text, uuid, boolean),
   public.colab_remover_subordinado(text, uuid),
+  public.colab_mi_equipo(text),
   public.colab_resguardos_globales(text),
-  public.colab_registrar_revision(text, uuid, text, text),
   public.colab_cambiar_password(text, text, text, text),
   public.colab_logout(text),
   public.colab_establecer_nip(text, text, text)

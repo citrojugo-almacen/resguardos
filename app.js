@@ -14,6 +14,7 @@
   var ui = {
     tab: "dashboard",
     query: "", tableQuery: "", catQuery: "", empListQuery: "",
+    tableFiltroEstado: "todos", tableFiltroCondicion: "todas", tableFiltroAuditoria: "todas", tableFiltroArea: "todas",
     empQuery: "", toolQuery: "",
     currentUser: null,
     loginForm: { username: "", password: "" },   // username = correo electrónico
@@ -346,30 +347,25 @@
     opts = opts || {};
     if(!opts.silent){ ui.loading = true; ui.loadError = ""; render(); }
     var verCostos = puedeVerCostos();
-    var toolCols = verCostos ? "id,nombre,id_articulo,costo" : "id,nombre,id_articulo";
-    var resCols = verCostos ? (RES_COLS + ",costo_unitario") : RES_COLS;
+    var toolCols = "id,nombre,id_articulo";
+    var resCols = RES_COLS;
     return Promise.all([
       selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada,nivel_jerarquico,puede_auditar", "nombre.asc,id.asc").catch(function(e){
         if(e.status === 400) return selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada", "nombre.asc,id.asc");
         throw e;
       }),
-      selectAll("herramientas", toolCols, "nombre.asc,id.asc").catch(function(e){
-        if(verCostos && e.status === 400) return selectAll("herramientas", "id,nombre,id_articulo", "nombre.asc,id.asc");
-        throw e;
-      }),
+      selectAll("herramientas", toolCols, "nombre.asc,id.asc"),
       selectAll("resguardos", resCols, "creado_en.desc,id.desc").catch(function(e){
         if(e.status === 400){
-          return selectAll("resguardos", RES_COLS, "creado_en.desc,id.desc").catch(function(e2){
-            if(e2.status === 400) return selectAll("resguardos", RES_COLS_BASE, "creado_en.desc,id.desc");
-            throw e2;
-          });
+          return selectAll("resguardos", RES_COLS_BASE, "creado_en.desc,id.desc");
         }
         throw e;
       }),
       ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,cargo,activo", "email.asc") : Promise.resolve(null),
       // Si la base aún no tiene el portal (schema.sql anterior), la app sigue funcionando.
       rpc("estado_portal_colaboradores", {}).catch(function(){ return null; }),
-      selectAll("constancias", "id,folio,colaborador_id,emitida_en,emitida_por,emitida_por_cargo,resguardos_cerrados,codigo", "folio.desc").catch(function(){ return null; })
+      selectAll("constancias", "id,folio,colaborador_id,emitida_en,emitida_por,emitida_por_cargo,resguardos_cerrados,codigo", "folio.desc").catch(function(){ return null; }),
+      verCostos ? rpc("obtener_costos_almacen", {}).catch(function(){ return null; }) : Promise.resolve(null)
     ]).then(function(res){
       var all = res[0].filter(okId).map(mapEmployee);
       employees = all.filter(function(e){ return e.activo; });
@@ -382,6 +378,16 @@
       if(Array.isArray(res[4])){
         portalEstado = {};
         res[4].forEach(function(x){ if(x && UUID_RE.test(String(x.colaborador_id))) portalEstado[String(x.colaborador_id)] = { activado: !!x.activado, bloqueado: !!x.bloqueado }; });
+      }
+      if(res[6] && res[6].ok){
+        var toolCosts = res[6].herramientas || {};
+        var resCosts = res[6].resguardos || {};
+        tools.forEach(function(t){
+          if(toolCosts[t.id] != null) t.costo = parseFloat(toolCosts[t.id]) || 0;
+        });
+        resguardos.forEach(function(r){
+          if(resCosts[r.id] != null) r.costoUnitario = parseFloat(resCosts[r.id]) || 0;
+        });
       }
       lastLoadAt = Date.now();
       ui.loading = false; ui.loadError = ""; ui.offline = false;
@@ -427,6 +433,7 @@
     ui.showNewEmployeeModal = false; ui.showNewUserModal = false;
     ui.form = { employeeId: "", herramienta: "", cantidad: 1, occ: "", idArticulo: "", idArticuloHint: "", idArticuloMatched: false, notas: "", fechaPrestamo: "" };
     ui.empQuery = ""; ui.toolQuery = ""; ui.query = ""; ui.tableQuery = ""; ui.catQuery = ""; ui.empListQuery = "";
+    ui.tableFiltroEstado = "todos"; ui.tableFiltroCondicion = "todas"; ui.tableFiltroAuditoria = "todas"; ui.tableFiltroArea = "todas";
   }
 
   // ---------- Respaldo de la versión anterior (localStorage de esta PC) ----------
@@ -1232,6 +1239,32 @@
 
   function tablaTpl(){
     var list = getAllSorted();
+
+    var fEstado = ui.tableFiltroEstado || "todos";
+    var fCond = ui.tableFiltroCondicion || "todas";
+    var fAudit = ui.tableFiltroAuditoria || "todas";
+    var fArea = ui.tableFiltroArea || "todas";
+
+    if(fEstado !== "todos"){
+      list = list.filter(function(r){ return r.estado === fEstado; });
+    }
+    if(fCond !== "todas"){
+      list = list.filter(function(r){ return r.condicion === fCond; });
+    }
+    if(fAudit !== "todas"){
+      if(fAudit === "sin_auditar"){
+        list = list.filter(function(r){ return !r.revisionResultado; });
+      } else {
+        list = list.filter(function(r){ return r.revisionResultado === fAudit; });
+      }
+    }
+    if(fArea !== "todas"){
+      list = list.filter(function(r){
+        var emp = empName(r.employeeId);
+        return emp && emp.area === fArea;
+      });
+    }
+
     if(ui.tableQuery.trim()){
       var q = norm(ui.tableQuery);
       list = list.filter(function(r){
@@ -1241,12 +1274,62 @@
     }
     var page = paginate(list, "tabla");
     var verCostos = puedeVerCostos();
-    var html = '<div class="searchWrap"><span class="searchIcon">'+icon("search")+'</span>' +
-      '<input type="text" id="input-search-table" placeholder="Buscar en la tabla ('+resguardos.length+' en total)" value="'+esc(ui.tableQuery)+'"/></div>';
+
+    var areaSet = {};
+    employees.forEach(function(e){ if(e.area) areaSet[e.area] = true; });
+    var areas = Object.keys(areaSet).sort();
+    var hayFiltros = (fEstado !== "todos" || fCond !== "todas" || fAudit !== "todas" || fArea !== "todas" || ui.tableQuery.trim().length > 0);
+
+    var html = '<div class="tableControlsWrap">' +
+      '<div class="searchWrap" style="flex:1;min-width:260px;margin-bottom:0;"><span class="searchIcon">'+icon("search")+'</span>' +
+      '<input type="text" id="input-search-table" placeholder="Buscar por herramienta, OCC, ID o colaborador ('+resguardos.length+' total)" value="'+esc(ui.tableQuery)+'"/></div>' +
+      '<div class="tableFilterBar">' +
+        '<div class="filterGroup">' +
+          '<label for="f-tbl-estado">Estado:</label>' +
+          '<select id="f-tbl-estado" data-action="table-filtro-estado" class="filterSelect">' +
+            '<option value="todos"'+(fEstado==="todos"?' selected':'')+'>Todos</option>' +
+            '<option value="activo"'+(fEstado==="activo"?' selected':'')+'>Activos</option>' +
+            '<option value="devuelto"'+(fEstado==="devuelto"?' selected':'')+'>Devueltos</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="filterGroup">' +
+          '<label for="f-tbl-cond">Condición:</label>' +
+          '<select id="f-tbl-cond" data-action="table-filtro-condicion" class="filterSelect">' +
+            '<option value="todas"'+(fCond==="todas"?' selected':'')+'>Todas</option>' +
+            '<option value="nuevo"'+(fCond==="nuevo"?' selected':'')+'>Nuevo</option>' +
+            '<option value="usado_bueno"'+(fCond==="usado_bueno"?' selected':'')+'>Usado bueno</option>' +
+            '<option value="usado_malo"'+(fCond==="usado_malo"?' selected':'')+'>Usado malo</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="filterGroup">' +
+          '<label for="f-tbl-audit">Auditoría:</label>' +
+          '<select id="f-tbl-audit" data-action="table-filtro-auditoria" class="filterSelect">' +
+            '<option value="todas"'+(fAudit==="todas"?' selected':'')+'>Todas</option>' +
+            '<option value="bien"'+(fAudit==="bien"?' selected':'')+'>En orden</option>' +
+            '<option value="danada"'+(fAudit==="danada"?' selected':'')+'>Dañada</option>' +
+            '<option value="no_localizada"'+(fAudit==="no_localizada"?' selected':'')+'>No localizada</option>' +
+            '<option value="sin_auditar"'+(fAudit==="sin_auditar"?' selected':'')+'>Sin auditar</option>' +
+          '</select>' +
+        '</div>' +
+        (areas.length ? (
+        '<div class="filterGroup">' +
+          '<label for="f-tbl-area">Área:</label>' +
+          '<select id="f-tbl-area" data-action="table-filtro-area" class="filterSelect">' +
+            '<option value="todas"'+(fArea==="todas"?' selected':'')+'>Todas ('+areas.length+')</option>' +
+            areas.map(function(a){ return '<option value="'+esc(a)+'"'+(fArea===a?' selected':'')+'>'+esc(a)+'</option>'; }).join('') +
+          '</select>' +
+        '</div>'
+        ) : '') +
+        (hayFiltros ? '<button type="button" class="btnFilterReset" data-action="table-limpiar-filtros" title="Restablecer filtros">'+icon("x")+' Limpiar</button>' : '') +
+      '</div>' +
+    '</div>';
+
     if(list.length===0){
-      html += '<p class="empty">Sin registros.</p>';
+      html += '<p class="empty">Sin registros con los filtros seleccionados.' +
+        (hayFiltros ? ' <button type="button" class="link" data-action="table-limpiar-filtros" style="display:inline-block;margin-left:6px;background:none;border:none;cursor:pointer;color:var(--tint);font-weight:600;font-size:inherit;">Restablecer filtros</button>' : '') +
+        '</p>';
     } else {
-      var headers = ["Entrega","Colaborador","Herramienta","Cant.","Condición","OCC","ID art."];
+      var headers = ["Entrega","Colaborador","Herramienta","Cant.","Condición","Auditoría","OCC","ID art."];
       if(verCostos) headers.push("Costo unit.");
       headers.push("Estado","Devuelto","Autorizó","Notas");
       html += '<div class="tableScroll"><table><thead><tr>' +
@@ -1259,12 +1342,17 @@
           var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
           costCell = '<td style="text-align:right;font-family:var(--mono);">'+(c > 0 ? formatMoney(c) : '<span class="dim">—</span>')+'</td>';
         }
+        var auditCell = r.revisionResultado ?
+          '<td><span class="cond rv-'+r.revisionResultado+'" title="Revisado '+fmtShort(r.revisionEn)+(r.revisionNota ? ': '+esc(r.revisionNota) : '')+'">'+REVISION[r.revisionResultado]+'</span></td>' :
+          '<td class="dim"><span class="cond rv-none">Sin revisión</span></td>';
+
         html += '<tr'+(r.estado==="devuelto"?' class="devuelto-row"':'')+'>' +
           '<td>'+fmtShort(r.fechaPrestamo)+'</td>' +
           '<td class="clip" title="'+(emp?esc(empLabel(emp)):"")+'">'+(emp?esc(emp.nombre):"—")+(emp && emp.numero ? ' <span class="code dim">#'+esc(emp.numero)+'</span>' : '')+'</td>' +
           '<td class="clip" title="'+esc(r.herramienta)+'">'+esc(r.herramienta)+'</td>' +
           '<td style="text-align:right;">'+r.cantidad+'</td>' +
           '<td>'+(r.condicion?CONDICION[r.condicion]:'<span class="dim">—</span>')+'</td>' +
+          auditCell +
           '<td class="code">'+(r.occ?esc(r.occ):"—")+'</td>' +
           '<td class="code">'+(r.idArticulo?esc(r.idArticulo):"—")+'</td>' +
           costCell +
@@ -2475,6 +2563,15 @@
       switch(action){
         case "set-tab": setTab(actionEl.dataset.tab); break;
         case "load-more": ui.visible[actionEl.dataset.key] = (ui.visible[actionEl.dataset.key]||ui.pageSize) + ui.pageSize; render(); break;
+        case "table-limpiar-filtros":
+          ui.tableFiltroEstado = "todos";
+          ui.tableFiltroCondicion = "todas";
+          ui.tableFiltroAuditoria = "todas";
+          ui.tableFiltroArea = "todas";
+          ui.tableQuery = "";
+          ui.visible.tabla = ui.pageSize;
+          render();
+          break;
         case "open-new-employee":
           ui.empForm = {numero:"",nombre:"",pin:"",pin2:""}; ui.empFormError="";
           ui.showNewEmployeeModal = true; render(); break;
@@ -2701,13 +2798,25 @@
     }
   });
 
-  // Cambio de rol de una cuenta (pide confirmación de admin)
+  // Cambio de rol de una cuenta (pide confirmación de admin) o filtros de tabla
   document.addEventListener("change", function(e){
     var t = e.target;
-    if(t && t.dataset && t.dataset.action === "user-rol"){
+    if(!t) return;
+    if(t.dataset && t.dataset.action === "user-rol"){
       var cu = users.filter(function(u){ return u.id===t.dataset.id; })[0];
       var rol = ["admin","supervisor","almacen"].indexOf(t.value) >= 0 ? t.value : "almacen";
       if(cu) openAuth("admin-user", {userId:cu.id, rol:rol, activo:!!cu.activo, email:cu.email});
+      return;
+    }
+    if(t.dataset && t.dataset.action && t.dataset.action.indexOf("table-filtro-") === 0){
+      var fa = t.dataset.action;
+      if(fa === "table-filtro-estado") ui.tableFiltroEstado = t.value;
+      else if(fa === "table-filtro-condicion") ui.tableFiltroCondicion = t.value;
+      else if(fa === "table-filtro-auditoria") ui.tableFiltroAuditoria = t.value;
+      else if(fa === "table-filtro-area") ui.tableFiltroArea = t.value;
+      ui.visible.tabla = ui.pageSize;
+      render();
+      return;
     }
   });
 

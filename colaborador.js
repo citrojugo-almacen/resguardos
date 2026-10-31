@@ -36,7 +36,6 @@
     equipoQuery: "",
     equipoFiltro: "todos",     // todos | con_herramienta | pendientes
     expandedSubId: null,
-    auditModal: null,          // { resguardoId, herramienta, colaborador, resultado: "bueno", nota: "", pending: false, error: "" }
     vistaModo: "personal",     // personal | global (solo directores)
     globalData: null,
     globalLoading: false,
@@ -315,6 +314,43 @@
   function cardCls(view, first){ if(animated[view]) return " calm"; animated[view] = true; return first || ""; }
   function mmss(s){ return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2) + " para terminar"; }
 
+  function solicitudesPendientesTpl(list){
+    if(!list || !list.length) return "";
+    return '<div class="inviteBanner" role="region" aria-label="Solicitudes de supervisión">' +
+      '<div class="inviteBannerHead">' +
+        '<span class="inviteBannerIco">' + icon("shield") + '</span>' +
+        '<div><div class="inviteBannerTitle">Solicitud de supervisión de herramienta</div>' +
+        '<p class="inviteBannerSub">Los siguientes líderes solicitan autorización para consultar y supervisar tus resguardos de herramienta:</p></div>' +
+      '</div>' +
+      '<div class="inviteList">' +
+        list.map(function(sol){
+          return '<div class="inviteItem">' +
+            '<div class="inviteInfo">' +
+              '<div class="inviteLiderName">' + esc(titleCase(sol.lider_nombre)) + (sol.lider_numero ? ' <span class="numEmpCode">#' + esc(sol.lider_numero) + '</span>' : '') + '</div>' +
+              '<div class="inviteLiderMeta">' + esc(sentenceCase(sol.lider_puesto) || "Líder") + (sol.lider_area ? ' · ' + esc(titleCase(sol.lider_area)) : '') + '</div>' +
+              '<div class="inviteLiderDate">Solicitado el ' + fmt(sol.solicitado_en) + '</div>' +
+            '</div>' +
+            '<div class="inviteActions">' +
+              '<button type="button" class="btnPrimary btnSm" data-action="responder-invitacion" data-lider="' + sol.lider_id + '" data-acepta="1">Aceptar supervisión</button>' +
+              '<button type="button" class="btnOutline btnSm" data-action="responder-invitacion" data-lider="' + sol.lider_id + '" data-acepta="0">Rechazar</button>' +
+            '</div>' +
+          '</div>';
+        }).join("") +
+      '</div>' +
+    '</div>';
+  }
+
+  function solicitarLiderTpl(p){
+    if(p.es_lider) return "";
+    if(p.solicitud_liderazgo_pendiente){
+      return '<div class="liderRequestBox"><span class="badge yellow" style="font-weight:700;">En revisión</span> Tu solicitud para tener facultades de líder está pendiente de aprobación por el área de Almacén.</div>';
+    }
+    return '<div class="liderRequestBox">' +
+      '<div><div class="liderReqTitle">¿Tienes personal a cargo en Citrojugo?</div><div class="liderReqSub">Solicita al área de Almacén facultades de líder para supervisar la herramienta de tu personal asignado.</div></div>' +
+      '<button type="button" class="btnOutline btnSm" data-action="solicitar-liderazgo">Solicitar ser líder</button>' +
+    '</div>';
+  }
+
   function portalTpl(){
     var d = st.data;
     var top = '<header class="topBar"><div class="topInner"><img src="' + LOGO + '" alt=""/>' +
@@ -352,13 +388,14 @@
       '<div class="sumItem' + (maxDias >= VIEJO ? ' s-old' : '') + '"><div class="sumLabel">Más antigua</div><div class="sumValue" data-count="' + (act.length ? maxDias : 0) + '">' + (act.length ? maxDias : '—') + '</div><div class="sumSub">' + (act.length ? (maxDias === 1 ? 'día contigo' : 'días contigo') : 'sin pendientes') + '</div></div>' +
     '</section>';
 
-    var hasEquipo = !!(st.equipoData && st.equipoData.ok && st.equipoData.equipo && st.equipoData.equipo.length > 0);
+    var isLider = !!(p.es_lider || (st.equipoData && st.equipoData.ok));
+    var eqCount = (st.equipoData && st.equipoData.equipo) ? st.equipoData.equipo.length : 0;
     var seg = '';
-    if(hasEquipo){
+    if(isLider){
       var posClass = st.tab === "activos" ? "pos-0" : (st.tab === "equipo" ? "pos-1" : "pos-2");
       seg = '<div class="seg cols3 ' + posClass + '" role="tablist"><span class="segGlider" aria-hidden="true"></span>' +
         '<button type="button" role="tab" class="segBtn' + (st.tab === "activos" ? ' on' : '') + '" aria-selected="' + (st.tab === "activos") + '" data-action="tab" data-tab="activos">Mis resguardos <span class="segCount">' + act.length + '</span></button>' +
-        '<button type="button" role="tab" class="segBtn' + (st.tab === "equipo" ? ' on' : '') + '" aria-selected="' + (st.tab === "equipo") + '" data-action="tab" data-tab="equipo">Mi personal <span class="segCount">' + st.equipoData.equipo.length + '</span></button>' +
+        '<button type="button" role="tab" class="segBtn' + (st.tab === "equipo" ? ' on' : '') + '" aria-selected="' + (st.tab === "equipo") + '" data-action="tab" data-tab="equipo">Mi personal <span class="segCount">' + eqCount + '</span></button>' +
         '<button type="button" role="tab" class="segBtn' + (st.tab === "historial" ? ' on' : '') + '" aria-selected="' + (st.tab === "historial") + '" data-action="tab" data-tab="historial">Historial <span class="segCount">' + evs.length + '</span></button></div>';
     } else {
       seg = '<div class="seg' + (st.tab === "historial" ? ' right' : '') + '" role="tablist"><span class="segGlider" aria-hidden="true"></span>' +
@@ -367,7 +404,7 @@
     }
 
     var body;
-    if(st.tab === "equipo" && hasEquipo){
+    if(st.tab === "equipo" && isLider){
       body = equipoTpl();
     } else if(st.tab === "activos"){
       body = act.length === 0
@@ -405,7 +442,7 @@
     }
     var foot = '<p class="pFoot">Esta es una consulta personal: nadie más ve esta información desde aquí. Si algo no coincide con lo que tienes, avisa en el almacén.' +
       (p.ultimo_acceso ? '<br/>Último ingreso anterior: ' + fmt(p.ultimo_acceso) + '.' : '') + '</p>';
-    return '<div class="portal">' + top + '<main class="wrap">' + badge + nipCardTpl() + summary + seg + body + foot + '</main></div>';
+    return '<div class="portal">' + top + '<main class="wrap">' + badge + nipCardTpl() + solicitudesPendientesTpl(d.solicitudes_pendientes) + summary + seg + body + solicitarLiderTpl(p) + foot + '</main></div>';
   }
 
   function loadGlobal(){
@@ -434,10 +471,10 @@
     st.addColabError = "";
     if(!num){ st.addColabError = "Escribe el número de empleado."; render(); return; }
     st.addColabPending = true; render();
-    call("colab_agregar_subordinado", { p_token: st.token, p_numero_empleado: num }).then(function(r){
+    call("colab_solicitar_subordinado", { p_token: st.token, p_numero_empleado: num }).then(function(r){
       st.addColabPending = false;
       if(!r.ok){
-        st.addColabError = r.mensaje || "No se pudo agregar al colaborador.";
+        st.addColabError = r.mensaje || "No se pudo enviar la solicitud.";
         render();
         return;
       }
@@ -449,6 +486,42 @@
       st.addColabPending = false;
       st.addColabError = e.message;
       render();
+    });
+  }
+
+  function responderInvitacion(liderId, acepta){
+    if(!liderId) return;
+    call("colab_responder_solicitud_lider", {
+      p_token: st.token,
+      p_lider_id: liderId,
+      p_aceptar: !!acepta
+    }).then(function(r){
+      if(!r.ok){
+        toast("err", r.mensaje || "Error al procesar solicitud.");
+        return;
+      }
+      toast("ok", r.mensaje);
+      load(true);
+      loadEquipo(true);
+    }, function(e){
+      toast("err", e.message);
+    });
+  }
+
+  function solicitarLiderazgo(){
+    if(!confirm("¿Deseas enviar una solicitud al área de Almacén para ser dado de alta como líder con personal a cargo?")) return;
+    call("colab_solicitar_liderazgo", {
+      p_token: st.token,
+      p_motivo: "Solicitud de facultades de líder desde el portal"
+    }).then(function(r){
+      if(!r.ok){
+        toast("err", r.mensaje || "No se pudo enviar la solicitud.");
+        return;
+      }
+      toast("ok", r.mensaje);
+      load(true);
+    }, function(e){
+      toast("err", e.message);
     });
   }
 
@@ -618,22 +691,39 @@
 
     html += '</div>';
 
-    // Recuadro para agregar colaborador por número de empleado
+    // Recuadro para solicitar autorización a colaborador por número de empleado
     html += '<div class="addColabCard">' +
-      '<div class="addColabTitle">' + icon("plus") + ' Asignar colaborador a mi equipo</div>' +
-      '<p class="hint">Escribe el número de empleado para sumarlo a tu supervisión.</p>' +
+      '<div class="addColabTitle">' + icon("plus") + ' Solicitar supervisión de colaborador por # de nómina</div>' +
+      '<p class="hint">Escribe el número de empleado para enviarle una solicitud de autorización a su portal.</p>' +
       '<form id="f-add-colab" class="addColabForm">' +
         '<input type="text" id="in-add-colab-num" class="num" inputmode="numeric" placeholder="Ej. 3538 o 0225" maxlength="30" value="' + esc(st.addColabNumero) + '"' + (st.addColabPending ? ' disabled' : '') + '/>' +
-        '<button type="submit" class="btnPrimary btnAddColab"' + (st.addColabPending ? ' disabled' : '') + '>' + (st.addColabPending ? 'Agregando...' : '+ Asignar') + '</button>' +
+        '<button type="submit" class="btnPrimary btnAddColab"' + (st.addColabPending ? ' disabled' : '') + '>' + (st.addColabPending ? 'Enviando...' : '+ Enviar solicitud') + '</button>' +
       '</form>' +
       (st.addColabError ? '<p class="errorText" style="margin:10px 0 0;">' + icon("alert") + '<span>' + esc(st.addColabError) + '</span></p>' : '') +
     '</div>';
 
+    // Sección de solicitudes enviadas pendientes de confirmación
+    if(eq.pendientes_confirmacion && eq.pendientes_confirmacion.length > 0){
+      html += '<div class="pendientesWrap">' +
+        '<div class="pendientesHead">' + icon("clock") + ' Solicitudes enviadas pendientes de confirmación (' + eq.pendientes_confirmacion.length + ')</div>' +
+        '<p class="hint" style="margin:3px 0 8px;">El colaborador debe entrar a su portal y aceptar la supervisión para habilitarte el acceso:</p>' +
+        '<div class="pendientesList">' +
+          eq.pendientes_confirmacion.map(function(pc){
+            return '<div class="pendienteRow">' +
+              '<div><b>' + esc(titleCase(pc.nombre)) + '</b> <span class="numEmpCode">#' + esc(pc.numero_empleado) + '</span>' +
+              '<div class="dim" style="font-size:12px;">' + esc(sentenceCase(pc.puesto) || "Colaborador") + (pc.area ? ' · ' + esc(titleCase(pc.area)) : '') + '</div></div>' +
+              '<span class="badge yellow" style="font-size:11.5px;font-weight:600;">Esperando aprobación</span>' +
+            '</div>';
+          }).join("") +
+        '</div>' +
+      '</div>';
+    }
+
     if(list.length === 0){
       html += '<div class="empty">' +
         '<span class="emptyIco">' + icon("users") + '</span>' +
-        '<b>No tienes colaboradores asignados aún</b>' +
-        '<p class="hint">Escribe el número de empleado de tu personal en el formulario superior para comenzar a supervisar sus herramientas.</p>' +
+        '<b>No tienes colaboradores autorizados aún</b>' +
+        '<p class="hint">Escribe el número de empleado de tu personal en el formulario superior para enviarle una solicitud de autorización. En cuanto acepte en su portal, aparecerá aquí.</p>' +
       '</div>';
       return html;
     }
@@ -658,18 +748,20 @@
       var activeCount = sub.herramientas_activas || 0;
       var needsRev = sub.pendientes_revision || 0;
       var items = sub.items || [];
+      var esDirecto = sub.es_directo !== false;
 
       html += '<article class="subCard' + (isExpanded ? ' expanded' : '') + '" style="--i:' + idx + '">' +
         '<div class="subCardHead" data-action="toggle-sub" data-id="' + sub.id + '">' +
           '<div class="subCardInfo">' +
             '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">' +
               '<div class="subName">' + esc(titleCase(sub.nombre)) + '</div>' +
-              '<button type="button" class="removeBtn" data-action="remove-sub" data-id="' + sub.id + '" data-name="' + esc(sub.nombre) + '" title="Quitar de mi lista">' +
+              (esDirecto ? '<button type="button" class="removeBtn" data-action="remove-sub" data-id="' + sub.id + '" data-name="' + esc(sub.nombre) + '" title="Quitar de mi lista">' +
                 icon("trash") + ' Quitar' +
-              '</button>' +
+              '</button>' : '') +
             '</div>' +
             '<div class="subMeta">' + (sub.numero_empleado ? '#' + esc(sub.numero_empleado) + ' · ' : '') + esc(sentenceCase(sub.puesto) || "Operativo") + (sub.area ? ' · ' + esc(titleCase(sub.area)) : '') + '</div>' +
             '<div class="subPills">' +
+              (esDirecto ? '<span class="subPill" style="background:var(--fill);">Directo</span>' : '<span class="subPill cascada">Cascada (por ' + esc(titleCase(sub.supervisor_directo || "líder")) + ')</span>') +
               '<span class="subPill' + (activeCount > 0 ? ' hasTools' : '') + '">' + icon("wrench") + ' ' + activeCount + (activeCount === 1 ? ' herramienta' : ' herramientas') + '</span>' +
               (needsRev > 0 ? '<span class="subPill needsReview">' + icon("alert") + ' ' + needsRev + ' por auditar</span>' : '') +
               (lider.puede_ver_costos && sub.valor_resguardos != null && sub.valor_resguardos > 0 ? '<span class="subPill cost">' + fmtMoney(sub.valor_resguardos) + '</span>' : '') +
@@ -680,7 +772,7 @@
 
       if(isExpanded){
         html += '<div class="subDetail">' +
-          '<div class="subDetailTitle">Herramientas asignadas</div>';
+          '<div class="subDetailTitle">Herramientas asignadas (Auditoría oficial de Almacén)</div>';
         if(items.length === 0){
           html += '<p class="hint" style="margin:4px 0 0;">Este colaborador no tiene herramientas activas actualmente.</p>';
         } else {
@@ -688,10 +780,10 @@
           items.forEach(function(item){
             var condLabel = COND[item.condicion] || item.condicion;
             var audStateClass = !item.revision_en ? 'pendiente' : (item.revision_resultado || 'pendiente');
-            var audStateLabel = !item.revision_en ? 'Sin auditar' :
-              (item.revision_resultado === 'bueno' ? 'Bueno' :
-               item.revision_resultado === 'danado' ? 'Dañado' :
-               item.revision_resultado === 'no_localizado' ? 'No localizado' : 'Auditado');
+            var audStateLabel = !item.revision_en ? 'Sin auditar por Almacén' :
+              (item.revision_resultado === 'bien' || item.revision_resultado === 'bueno' ? 'Bueno / Operativo' :
+               item.revision_resultado === 'danada' || item.revision_resultado === 'danado' ? 'Dañado' :
+               item.revision_resultado === 'no_localizada' || item.revision_resultado === 'no_localizado' ? 'No localizado' : 'Auditado por Almacén');
 
             html += '<div class="toolRow">' +
               '<div class="toolRowTop">' +
@@ -702,16 +794,13 @@
                 'Asignada el ' + fmt(item.fecha_prestamo) +
                 (item.id_articulo ? ' · ID ' + esc(item.id_articulo) : '') +
                 (item.occ ? ' · OCC ' + esc(item.occ) : '') +
-                (condLabel ? ' · ' + esc(condLabel) : '') +
+                (condLabel ? ' · Entrega: ' + esc(condLabel) : '') +
               '</div>' +
               '<div class="toolAuditInfo">' +
                 '<div>' +
                   '<span class="auditState ' + audStateClass + '">' + audStateLabel + '</span>' +
-                  (item.revision_en ? ' <span class="dim" style="font-size:12px;color:var(--label3);margin-left:4px;">(' + fmt(item.revision_en) + (item.revision_nota ? ' · "' + esc(item.revision_nota) + '"' : '') + ')</span>' : '') +
+                  (item.revision_en ? ' <span class="dim" style="font-size:12px;color:var(--label3);margin-left:4px;">(Auditado por Almacén: ' + fmt(item.revision_en) + (item.revision_nota ? ' · "' + esc(item.revision_nota) + '"' : '') + ')</span>' : '') +
                 '</div>' +
-                '<button type="button" class="btnAudit" data-action="open-audit" data-id="' + item.id + '" data-tool="' + esc(item.herramienta) + '" data-who="' + esc(sub.nombre) + '">' +
-                  icon("clipboard") + ' ' + (item.revision_en ? 'Actualizar auditoría' : 'Auditar') +
-                '</button>' +
               '</div>' +
             '</div>';
           });
@@ -743,49 +832,10 @@
       '</form></div></div>';
   }
 
-  function auditModalTpl(){
-    if(!st.auditModal) return "";
-    var m = st.auditModal;
-    return '<div class="overlay" data-action="audit-backdrop"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="audit-title">' +
-      '<div class="modalHead"><div>' +
-        '<div class="modalTitle" id="audit-title">Auditar herramienta</div>' +
-        '<p class="modalSub">Colaborador: <b>' + esc(titleCase(m.colaborador)) + '</b></p>' +
-      '</div>' +
-      '<button type="button" class="closeBtn" data-action="close-audit" aria-label="Cerrar">' + icon("x") + '</button></div>' +
-      '<div style="background:var(--surface);border:1px solid var(--sep);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;">' +
-        '<div style="font-size:12.5px;color:var(--label3);font-weight:600;">Herramienta física</div>' +
-        '<div style="font-size:16px;font-weight:700;margin-top:2px;">' + esc(m.herramienta) + '</div>' +
-      '</div>' +
-      '<form id="f-audit" novalidate>' +
-        '<label>Resultado de la inspección física</label>' +
-        '<div class="auditChoices">' +
-          '<label class="auditChoice">' +
-            '<input type="radio" name="audit-res" value="bueno"' + (m.resultado === "bueno" ? ' checked' : '') + '/>' +
-            '<div><span class="auditChoiceTitle" style="color:var(--okInk);">✓ Bueno / Operativo</span><span class="auditChoiceDesc">La herramienta está presente físicamente, en buenas condiciones y operable.</span></div>' +
-          '</label>' +
-          '<label class="auditChoice">' +
-            '<input type="radio" name="audit-res" value="danado"' + (m.resultado === "danado" ? ' checked' : '') + '/>' +
-            '<div><span class="auditChoiceTitle" style="color:var(--warnInk);">⚠ Dañado / Requiere atención</span><span class="auditChoiceDesc">Presente pero requiere reemplazo, reparación o mantenimiento.</span></div>' +
-          '</label>' +
-          '<label class="auditChoice">' +
-            '<input type="radio" name="audit-res" value="no_localizado"' + (m.resultado === "no_localizado" ? ' checked' : '') + '/>' +
-            '<div><span class="auditChoiceTitle" style="color:var(--danger);">✕ No localizado / Faltante</span><span class="auditChoiceDesc">El colaborador no presentó la herramienta durante la inspección.</span></div>' +
-          '</label>' +
-        '</div>' +
-        '<div class="field">' +
-          '<label for="in-audit-nota">Notas de la revisión (opcional)</label>' +
-          '<input type="text" id="in-audit-nota" maxlength="200" placeholder="Ej. Desgaste en mango, serie verificada..." value="' + esc(m.nota || "") + '"/>' +
-        '</div>' +
-        (m.error ? '<p class="errorText" role="alert">' + icon("alert") + '<span>' + esc(m.error) + '</span></p>' : '') +
-        '<button type="submit" class="btnPrimary"' + (m.pending ? ' disabled' : '') + '>' + (m.pending ? 'Guardando auditoría…' : 'Guardar auditoría oficial') + '</button>' +
-      '</form>' +
-    '</div></div>';
-  }
-
   // ---------- Render ----------
   function render(){
     var keep = captureInputs();
-    var html = st.view === "activar" ? activarTpl() : st.view === "nip" ? nipTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() + auditModalTpl() : loginTpl();
+    var html = st.view === "activar" ? activarTpl() : st.view === "nip" ? nipTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() : loginTpl();
     if(st.toast) html += '<div class="toast ' + (st.toast.type === "err" ? "err" : "") + '" role="status"><span class="tIcon">' + icon(st.toast.type === "err" ? "alert" : "check") + '</span>' + esc(st.toast.msg) + '</div>';
     app.innerHTML = html;
     restoreInputs(keep);
@@ -1057,34 +1107,6 @@
     }, function(e){ m.pending = false; m.error = e.message; render(); });
   }
 
-  function submitAudit(){
-    var m = st.auditModal; if(!m || m.pending) return;
-    var nota = (val("in-audit-nota") || "").trim();
-    var checkedRadio = document.querySelector('input[name="audit-res"]:checked');
-    var res = checkedRadio ? checkedRadio.value : m.resultado;
-    if(!res){ m.error = "Elige el resultado de la inspección."; render(); return; }
-    m.pending = true; render();
-    call("colab_registrar_revision", {
-      p_token: st.token,
-      p_resguardo_id: m.resguardoId,
-      p_resultado: res,
-      p_nota: nota
-    }).then(function(r){
-      m.pending = false;
-      if(!r.ok){
-        if(r.error === "sesion"){ st.auditModal = null; sessionEnded(r.mensaje); return; }
-        m.error = r.mensaje || "No se pudo registrar la auditoría."; render(); return;
-      }
-      st.auditModal = null;
-      toast("ok", "Auditoría registrada correctamente.");
-      loadEquipo(true);
-    }, function(e){
-      m.pending = false;
-      m.error = e.message;
-      render();
-    });
-  }
-
   // ---------- Eventos ----------
   document.addEventListener("submit", function(e){
     e.preventDefault();
@@ -1092,7 +1114,6 @@
     if(id === "f-login") submitLogin();
     else if(id === "f-activar") submitActivar();
     else if(id === "f-pw") submitPw();
-    else if(id === "f-audit") submitAudit();
     else if(id === "f-add-colab") submitAddColab();
   });
   document.addEventListener("input", function(e){
@@ -1113,7 +1134,16 @@
     if(!el) return;
     var a = el.getAttribute("data-action");
     if(a === "pw-backdrop"){ if(e.target === el && !(st.pwModal && st.pwModal.pending)){ st.pwModal = null; render(); } return; }
-    if(a === "audit-backdrop"){ if(e.target === el && !(st.auditModal && st.auditModal.pending)){ st.auditModal = null; render(); } return; }
+    if(a === "responder-invitacion"){
+      var liderId = el.getAttribute("data-lider");
+      var acepta = el.getAttribute("data-acepta") === "1";
+      responderInvitacion(liderId, acepta);
+      return;
+    }
+    if(a === "solicitar-liderazgo"){
+      solicitarLiderazgo();
+      return;
+    }
     if(a === "toggle-vista-modo"){
       var m = el.getAttribute("data-modo");
       if(m && m !== st.vistaModo){
@@ -1157,20 +1187,6 @@
       render();
       return;
     }
-    if(a === "open-audit"){
-      st.auditModal = {
-        resguardoId: el.getAttribute("data-id"),
-        herramienta: el.getAttribute("data-tool"),
-        colaborador: el.getAttribute("data-who"),
-        resultado: "bueno",
-        nota: "",
-        pending: false,
-        error: ""
-      };
-      render();
-      return;
-    }
-    if(a === "close-audit"){ st.auditModal = null; render(); return; }
     if(a === "pin"){ nipPress(el.getAttribute("data-k")); return; }
     if(a === "pin-del"){ nipDel(); return; }
     if(a === "open-nip"){ openNip(st.data && st.data.nip && st.data.nip.tiene ? "cambiar" : "crear", false); return; }

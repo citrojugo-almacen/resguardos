@@ -436,8 +436,39 @@
   .numEmpCode{font-family:var(--mono);font-size:12px;color:var(--label3);background:var(--fill);padding:2px 6px;border-radius:4px;}
   .moneyVal{font-family:var(--mono);font-weight:700;color:var(--okInk);}
 
+  /* Solicitudes de supervisión de líderes y peticiones de liderazgo */
+  .inviteBanner{background:linear-gradient(135deg,rgba(47,106,60,.12) 0%,rgba(139,197,63,.15) 100%);border:1.5px solid var(--tint);border-radius:var(--r);padding:16px;margin-bottom:18px;box-shadow:var(--shadow-1);}
+  .inviteBannerHead{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px;}
+  .inviteBannerIco{width:36px;height:36px;border-radius:50%;background:var(--tint);color:#fff;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .inviteBannerTitle{font-size:15px;font-weight:700;color:var(--brandDeep);}
+  .inviteBannerSub{font-size:13px;color:var(--label2);margin:2px 0 0;}
+  .inviteList{display:grid;gap:10px;}
+  .inviteItem{background:var(--surface);border:1px solid var(--sep);border-radius:var(--r-sm);padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .inviteInfo{flex:1;min-width:200px;}
+  .inviteLiderName{font-size:14.5px;font-weight:700;color:var(--label);}
+  .inviteLiderMeta{font-size:13px;color:var(--label2);margin-top:2px;}
+  .inviteLiderDate{font-size:11.5px;color:var(--label3);margin-top:2px;}
+  .inviteActions{display:flex;gap:8px;}
+  .btnSm{min-height:36px;padding:0 14px;font-size:13px;}
+
+  .liderRequestBox{background:var(--surface);border:1px dashed var(--sepStrong);border-radius:var(--r);padding:16px;margin-top:20px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;}
+  .liderReqTitle{font-size:14px;font-weight:700;color:var(--label);}
+  .liderReqSub{font-size:12.5px;color:var(--label2);margin-top:2px;}
+
+  .subPill.cascada{background:#EBF3FA;color:#185A9D;font-weight:600;}
+  .pendientesWrap{background:var(--surface);border-radius:var(--r);border:1px solid var(--sep);padding:14px 16px;margin-bottom:16px;}
+  .pendientesHead{font-size:13.5px;font-weight:700;color:var(--warnInk);display:flex;align-items:center;gap:6px;}
+  .pendientesList{display:grid;gap:8px;margin-top:10px;}
+  .pendienteRow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;background:var(--surface2);border-radius:var(--r-sm);font-size:13px;}
+
   @media (max-width:560px){
     .addColabForm{flex-direction:column;align-items:stretch;}
+    .inviteItem{flex-direction:column;align-items:stretch;}
+    .inviteActions{justify-content:stretch;}
+    .inviteActions button{flex:1;}
+    .liderRequestBox{flex-direction:column;align-items:stretch;}
+    .liderRequestBox button{width:100%;}
+  }
     .btnAddColab{width:100%;}
     .execToggleBtn{font-size:12px;padding:6px;}
     .overlay{align-items:flex-end;padding:0;}

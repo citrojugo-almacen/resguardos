@@ -485,7 +485,15 @@
   .statusChip.activo::before{background:var(--okLine);}
   .statusChip.devuelto{background:#ECECF0;color:var(--label2);}
 
-  /* ============ Tabla ============ */
+  /* ============ Tabla y Filtros ============ */
+  .tableControlsWrap{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:14px;}
+  .tableFilterBar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;}
+  .filterGroup{display:inline-flex;align-items:center;gap:6px;}
+  .filterGroup label{font-size:12px;font-weight:600;color:var(--label2);text-transform:uppercase;letter-spacing:.03em;}
+  .filterSelect{font-size:13px;padding:6px 28px 6px 10px;min-height:36px;border-radius:var(--r-sm);background-color:var(--surface);border:1px solid var(--sep);color:var(--label);cursor:pointer;}
+  .btnFilterReset{display:inline-flex;align-items:center;gap:4px;padding:6px 12px;font-size:12.5px;font-weight:600;color:var(--danger);background:var(--dangerBg);border:1px solid rgba(224,58,47,.2);border-radius:var(--r-sm);cursor:pointer;transition:all var(--t-fast) ease;}
+  .btnFilterReset:hover{background:rgba(224,58,47,.16);}
+  .btnFilterReset svg{width:13px;height:13px;}
   .tableScroll{border-radius:var(--r);overflow:auto;max-height:70vh;background:var(--surface);box-shadow:var(--shadow-1);}
   table{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px;font-variant-numeric:tabular-nums;}
   thead th{position:sticky;top:0;z-index:1;background:rgba(247,247,249,.92);-webkit-backdrop-filter:saturate(180%) blur(12px);backdrop-filter:saturate(180%) blur(12px);
