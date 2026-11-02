@@ -2484,13 +2484,20 @@ create policy bitacora_leer on public.bitacora for select to authenticated
 -- =====================================================================
 revoke all on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora, public.constancias
   from public, anon, authenticated;
-grant select on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora, public.constancias
+
+-- Perfiles, colaboradores, constancias y bitácora conceden SELECT a authenticated (RLS filtra filas)
+grant select on public.perfiles, public.colaboradores, public.constancias, public.bitacora
   to authenticated;
 
--- Blindaje de costos (Bug 3): se revoca SELECT sobre las columnas económicas para authenticated.
+-- Blindaje estricto de costos a nivel de columna:
+-- authenticated SOLO tiene permiso SELECT en columnas operativas de herramientas y resguardos.
+-- Las columnas costo y costo_unitario NO se conceden a authenticated.
 -- Solo se pueden consultar mediante la RPC protegida public.obtener_costos_almacen()
-revoke select (costo) on public.herramientas from authenticated;
-revoke select (costo_unitario) on public.resguardos from authenticated;
+grant select (id, nombre, id_articulo) on public.herramientas
+  to authenticated;
+
+grant select (id, grupo_id, colaborador_id, herramienta, cantidad, occ, id_articulo, fecha_prestamo, fecha_devolucion, estado, notas, creado_por, devuelto_por, creado_en, condicion, revision_en, revision_resultado, revision_por, revision_nota) on public.resguardos
+  to authenticated;
 
 revoke all on app.colaborador_nip, app.ajustes, app.lider_subordinado, app.solicitud_liderazgo, app.portal_lider, app.colaborador_huella from public, anon, authenticated;
 
