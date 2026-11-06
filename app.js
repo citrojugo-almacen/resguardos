@@ -275,6 +275,32 @@
       puedeAuditar: !!c.puede_auditar
     };
   }
+  var THEME_KEY = "citrojugo_theme";
+  function getPreferredTheme(){
+    try {
+      var saved = localStorage.getItem(THEME_KEY);
+      if(saved === "dark" || saved === "light") return saved;
+      if(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+    } catch(e){}
+    return "light";
+  }
+  function isDarkTheme(){
+    return (document.documentElement.getAttribute("data-theme") || getPreferredTheme()) === "dark";
+  }
+  function applyTheme(theme){
+    var t = theme || getPreferredTheme();
+    document.documentElement.setAttribute("data-theme", t);
+    return t;
+  }
+  function toggleTheme(){
+    var current = isDarkTheme() ? "dark" : "light";
+    var next = (current === "dark") ? "light" : "dark";
+    try { localStorage.setItem(THEME_KEY, next); }catch(e){}
+    applyTheme(next);
+    render();
+  }
+  applyTheme();
+
   function normNum(s){ return String(s || "").replace(/\s+/g, "").toUpperCase(); }
   function puedeVerCostos(){
     var r = ui.currentUser && ui.currentUser.rol;
@@ -283,6 +309,17 @@
   function formatMoney(amount){
     var n = Number(amount) || 0;
     return "$" + n.toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " MXN";
+  }
+  function empCostoTotal(empId){
+    var total = 0;
+    for(var i = 0; i < resguardos.length; i++){
+      var r = resguardos[i];
+      if(r.employeeId === empId && r.estado === "activo"){
+        var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
+        total += (c * (r.cantidad || 1));
+      }
+    }
+    return total;
   }
   function findToolCost(idArticulo, nombre){
     var ida = (idArticulo || "").trim().toUpperCase();
@@ -512,6 +549,8 @@
       nav_auditoria: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v3H9z"/><polyline points="9 13 11 15 15 11"/></svg>',
       nav_constancias: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/></svg>',
       fingerprint: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M9 6.8a6 6 0 0 1 9 5.2c0 .47 0 1.17-.02 2"/><path d="M4 10.95C4 4.5 9 2 12 2s8 2.5 8 8.95"/><path d="M6 14c.08-1.57.5-3.88 1.5-5.5"/><path d="M12 22a10.6 10.6 0 0 0 6-3"/></svg>',
+      sun: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+      moon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
       alert: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>'
     };
     return icons[name] || "";
@@ -783,11 +822,13 @@
     if(ui.currentUser && ui.currentUser.rol === "admin"){
       tabs.push({id:"usuarios", label:"Usuarios", badge:users.length});
     }
+    var dark = isDarkTheme();
     return '' +
     '<div class="brandBlock">' +
       '<div class="brandRow"><img src="'+LOGO+'" alt="Citrojugo"/>' +
         '<div style="min-width:0;"><div class="brandEyebrow">Citrojugo</div><div class="brandTitle">Resguardo de herramienta</div></div>' +
         '<button type="button" class="sideToggle" data-action="toggle-sidebar" title="Ocultar barra lateral" aria-label="Ocultar barra lateral">'+icon("sidebar")+'</button>' +
+        '<button type="button" class="logoutBtn mobileLogout" data-action="toggle-theme" title="'+(dark?'Cambiar a modo claro':'Cambiar a modo oscuro')+'" aria-label="Cambiar tema">'+(dark?icon("sun"):icon("moon"))+'</button>' +
         '<button type="button" class="logoutBtn mobileLogout" data-action="open-password" title="Cambiar contraseña" aria-label="Cambiar contraseña">'+icon("key")+'</button>' +
         '<button type="button" class="logoutBtn mobileLogout" data-action="logout" title="Cerrar sesión" aria-label="Cerrar sesión">'+icon("logout")+'</button>' +
       '</div>' +
@@ -800,7 +841,14 @@
       return section + '<button class="navBtn'+active+'"'+(active?' aria-current="page"':'')+' data-action="set-tab" data-tab="'+t.id+'">' +
         '<span class="navIco" aria-hidden="true">'+icon("nav_"+t.id)+'</span><span class="navLabel">'+esc(t.label)+'</span>'+badge+'</button>';
     }).join("") + '</div>' +
-    '<div class="sidebarFooter"><div class="userRow">' +
+    '<div class="sidebarFooter">' +
+      '<div class="themeRow">' +
+        '<span class="themeLabel">'+(dark?icon("moon"):icon("sun"))+' '+(dark?'Modo oscuro':'Modo claro')+'</span>' +
+        '<button type="button" class="themeToggleBtn" data-action="toggle-theme" title="'+(dark?'Cambiar a modo claro':'Cambiar a modo oscuro')+'" aria-label="Alternar tema">' +
+          '<span class="themeToggleTrack'+(dark?' on':'')+'"><span class="themeToggleThumb"></span></span>' +
+        '</button>' +
+      '</div>' +
+      '<div class="userRow">' +
       '<div class="avatar avatarLg">'+esc(initials(ui.currentUser?ui.currentUser.username:""))+'</div>' +
       '<div style="min-width:0;"><div class="userName">'+esc(ui.currentUser?ui.currentUser.username:"")+'</div>' +
       '<div class="userRole">'+esc(ui.currentUser?rolLabel(ui.currentUser):"")+'</div></div>' +
@@ -1010,10 +1058,13 @@
     var emp = ui.form.employeeId ? empName(ui.form.employeeId) : resolveEmployeeByQuery(q).emp;
     if(emp){
       var act = resguardos.filter(function(r){ return r.employeeId === emp.id && r.estado === "activo"; }).length;
+      var verCostos = puedeVerCostos();
+      var costoEmp = verCostos ? empCostoTotal(emp.id) : 0;
       return '<div class="empPick" role="status" aria-live="polite">' + avatarTpl(emp, "avatarXl") +
         '<div class="empPickMain"><small>Se asignará a</small><b>'+esc(emp.nombre)+'</b>' +
           '<span><span class="code">#'+esc(emp.numero)+'</span>'+(emp.puesto ? ' · '+esc(emp.puesto) : '')+(emp.area ? ' · '+esc(emp.area) : '')+'</span>' +
           '<div class="empPickTags">' + (act ? '<span class="empTag">'+act+' en resguardo</span>' : '<span class="empTag">Sin herramienta en resguardo</span>') +
+            (verCostos && act > 0 ? '<span class="empTag" style="font-family:var(--mono);color:var(--tint);background:var(--tintSoft);">Total en custodia: '+formatMoney(costoEmp)+'</span>' : '') +
             (emp.nipPendiente ? '<span class="empTag warn">Sin NIP: debe crearlo en su portal o asignárselo un supervisor</span>' : '<span class="empTag ok">NIP activo</span>') +
           '</div></div>' + icon("check") + '</div>';
     }
@@ -1176,7 +1227,29 @@
   }
 
   function empleadosTpl(){
+    var verCostos = puedeVerCostos();
     var html = '<div class="toolbar"><button class="btnGhost toolbarBtn" data-action="open-new-employee">'+icon("plus")+' Nuevo colaborador</button></div>';
+
+    if(verCostos){
+      var resActivos = resguardos.filter(function(r){ return r.estado === "activo"; });
+      var empConHerramientas = {};
+      var totalGlobalActivo = 0;
+      resActivos.forEach(function(r){
+        var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
+        totalGlobalActivo += (c * (r.cantidad || 1));
+        empConHerramientas[r.employeeId] = true;
+      });
+      var numEmpConHerramientas = Object.keys(empConHerramientas).length;
+
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-bottom:18px;">' +
+        '<div class="card" style="margin:0;padding:14px 18px;border-left:4px solid var(--tint);">' +
+          '<div style="font-size:12px;font-weight:600;color:var(--label2);text-transform:uppercase;letter-spacing:.03em;">Capital Activo en Custodia</div>' +
+          '<div style="font-size:22px;font-weight:700;color:var(--tint);font-family:var(--mono);margin-top:4px;">' + formatMoney(totalGlobalActivo) + '</div>' +
+          '<div style="font-size:12.5px;color:var(--label3);margin-top:2px;">' + numEmpConHerramientas + ' colaboradores con resguardo activo</div>' +
+        '</div>' +
+      '</div>';
+    }
+
     if(employees.length > 4){
       html += '<div class="searchWrap" style="max-width:480px;"><span class="searchIcon">'+icon("search")+'</span>' +
         '<input type="text" id="input-search-employees" placeholder="Buscar por nombre o número de empleado ('+employees.length+' en total)" value="'+esc(ui.empListQuery)+'"/></div>';
@@ -1187,6 +1260,7 @@
     html += '<div class="cardGrid listGroup">';
     page.shown.forEach(function(emp){
       var activosEmp = resguardos.filter(function(r){return r.employeeId===emp.id && r.estado==="activo";}).length;
+      var costoEmp = verCostos ? empCostoTotal(emp.id) : 0;
       if(ui.confirmDeleteEmpId === emp.id){
         html += '<div class="confirmBox" style="grid-column:1/-1;margin:0;"><p>¿Eliminar a <b>'+esc(emp.nombre)+'</b>?' +
           (activosEmp>0 ? ' Tiene '+activosEmp+' herramienta(s) en resguardo activo; se marcarán como devueltas.' : '') + ' Se pedirá autorización de un supervisor o administrador.</p>' +
@@ -1209,6 +1283,7 @@
             '<div class="area">'+(emp.numero ? '<span class="code">#'+esc(emp.numero)+'</span>' : 'Sin número de empleado')+(emp.area ? ' · '+esc(emp.area) : '')+'</div>' +
             (emp.nipPendiente ? '<div class="area">NIP pendiente · lo crea en su portal o asígnalo con el botón NIP</div>' : '') +
             portalLine(emp) +
+            (verCostos && activosEmp > 0 ? '<div class="costLine">Total en resguardo: <b>'+formatMoney(costoEmp)+'</b></div>' : '') +
             '<div style="margin-top:4px;">' +
               lvlBadge +
               (emp.huellaRegistrada ? '<span class="badgeBio">'+icon("fingerprint")+' Huella activa</span>' : '<span class="badgeBio none">'+icon("fingerprint")+' Sin huella</span>') +
@@ -1217,8 +1292,13 @@
           (ui.currentUser && ui.currentUser.rol === "admin" ? '<button type="button" class="link" data-action="admin-editar-lider" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Configurar facultades de líder y auditoría">Líder</button>' : '') +
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
           (portalEstado[emp.id] ? '<button type="button" class="link" data-action="reset-portal" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Restablecer el acceso al portal del colaborador">Portal</button>' : '') +
-          (activosEmp>0 ? '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>'
-                        : '<button type="button" class="link" data-action="cn-goto" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Constancia de no adeudo">Constancia</button>') +
+          (activosEmp>0 ?
+            (verCostos ?
+              '<button type="button" class="countChip hasCost" data-action="view-employee-tools" data-id="'+emp.id+'" title="Ver resguardos y desglose de costo">'+activosEmp+' en resguardo · <b>'+formatMoney(costoEmp)+'</b> '+icon("chevron")+'</button>' :
+              '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>'
+            ) :
+            (verCostos ? '<span class="badgeZeroCost">$0.00 MXN</span>' : '') +
+            '<button type="button" class="link" data-action="cn-goto" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Constancia de no adeudo">Constancia</button>') +
           '<button class="deleteBtn" data-action="request-delete-employee" data-id="'+emp.id+'" title="Eliminar colaborador" aria-label="Eliminar colaborador">'+icon("trash")+'</button>' +
         '</div>';
       }
@@ -1330,17 +1410,22 @@
         '</p>';
     } else {
       var headers = ["Entrega","Colaborador","Herramienta","Cant.","Condición","Auditoría","OCC","ID art."];
-      if(verCostos) headers.push("Costo unit.");
+      if(verCostos){
+        headers.push("Costo unit.");
+        headers.push("Costo total");
+      }
       headers.push("Estado","Devuelto","Autorizó","Notas");
       html += '<div class="tableScroll"><table><thead><tr>' +
-        headers.map(function(h){return '<th'+(h==="Cant."||h==="Costo unit."?' style="text-align:right;"':'')+'>'+h+'</th>';}).join("") +
+        headers.map(function(h){return '<th'+(h==="Cant."||h==="Costo unit."||h==="Costo total"?' style="text-align:right;"':'')+'>'+h+'</th>';}).join("") +
         '</tr></thead><tbody>';
       page.shown.forEach(function(r){
         var emp = empName(r.employeeId);
         var costCell = '';
         if(verCostos){
           var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
-          costCell = '<td style="text-align:right;font-family:var(--mono);">'+(c > 0 ? formatMoney(c) : '<span class="dim">—</span>')+'</td>';
+          var cTot = c * (r.cantidad || 1);
+          costCell = '<td style="text-align:right;font-family:var(--mono);">'+(c > 0 ? formatMoney(c) : '<span class="dim">—</span>')+'</td>' +
+                     '<td style="text-align:right;font-family:var(--mono);font-weight:600;color:var(--tint);">'+(cTot > 0 ? formatMoney(cTot) : '<span class="dim">—</span>')+'</td>';
         }
         var auditCell = r.revisionResultado ?
           '<td><span class="cond rv-'+r.revisionResultado+'" title="Revisado '+fmtShort(r.revisionEn)+(r.revisionNota ? ': '+esc(r.revisionNota) : '')+'">'+REVISION[r.revisionResultado]+'</span></td>' :
@@ -1363,6 +1448,18 @@
         '</tr>';
       });
       html += '</tbody></table></div>';
+
+      if(verCostos){
+        var sumaFiltrada = 0;
+        list.forEach(function(r){
+          var c = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta);
+          sumaFiltrada += (c * (r.cantidad || 1));
+        });
+        html += '<div style="margin-top:12px;padding:11px 16px;background:var(--surface);border-radius:var(--r-sm);border:1px solid var(--sep);display:flex;justify-content:space-between;align-items:center;font-size:13.5px;box-shadow:var(--shadow-1);">' +
+          '<span style="color:var(--label2);font-weight:500;">Valor económico acumulado ('+list.length+' resguardos):</span>' +
+          '<span style="font-family:var(--mono);font-weight:700;color:var(--tint);font-size:15px;">'+formatMoney(sumaFiltrada)+'</span>' +
+        '</div>';
+      }
     }
     html += '<p class="hint center" style="margin-top:8px;">'+page.shown.length+' de '+page.total+' registro'+(page.total!==1?'s':'')+'</p>';
     if(page.hasMore) html += loadMoreBtn("tabla", (page.total-page.shown.length)+' restantes');
@@ -1587,8 +1684,15 @@
   }
 
   function loginTpl(){
+    var dark = isDarkTheme();
     return '' +
-    '<div class="loginShell"><div class="loginCard">' +
+    '<div class="loginShell">' +
+      '<div class="loginThemeWrap">' +
+        '<button type="button" class="loginThemeBtn" data-action="toggle-theme" title="'+(dark?'Cambiar a modo claro':'Cambiar a modo oscuro')+'" aria-label="Alternar tema">' +
+          (dark ? icon("sun") : icon("moon")) + ' <span>'+(dark ? 'Modo claro' : 'Modo oscuro')+'</span>' +
+        '</button>' +
+      '</div>' +
+      '<div class="loginCard">' +
       '<div class="loginBrand"><img src="'+LOGO+'" alt="Citrojugo"/>' +
         '<div class="loginName">Citrojugo</div>' +
         '<div class="loginSub">Resguardo de herramienta</div></div>' +
@@ -2561,6 +2665,7 @@
       var action = actionEl.dataset.action;
       var id = actionEl.dataset.id;
       switch(action){
+        case "toggle-theme": toggleTheme(); break;
         case "set-tab": setTab(actionEl.dataset.tab); break;
         case "load-more": ui.visible[actionEl.dataset.key] = (ui.visible[actionEl.dataset.key]||ui.pageSize) + ui.pageSize; render(); break;
         case "table-limpiar-filtros":

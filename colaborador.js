@@ -14,6 +14,32 @@
 
   var LOGO = "logo.png";
   var STORE_KEY = "citrojugo_portal_v1";
+  var THEME_KEY = "citrojugo_theme";
+  function getPreferredTheme(){
+    try {
+      var saved = localStorage.getItem(THEME_KEY);
+      if(saved === "dark" || saved === "light") return saved;
+      if(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+    } catch(e){}
+    return "light";
+  }
+  function isDarkTheme(){
+    return (document.documentElement.getAttribute("data-theme") || getPreferredTheme()) === "dark";
+  }
+  function applyTheme(theme){
+    var t = theme || getPreferredTheme();
+    document.documentElement.setAttribute("data-theme", t);
+    return t;
+  }
+  function toggleTheme(){
+    var current = isDarkTheme() ? "dark" : "light";
+    var next = (current === "dark") ? "light" : "dark";
+    try { localStorage.setItem(THEME_KEY, next); }catch(e){}
+    applyTheme(next);
+    render();
+  }
+  applyTheme();
+
   var CFG = window.CITROJUGO_CONFIG || {};
   var API_URL = String(CFG.supabaseUrl || "").replace(/\/+$/, "");
   var API_KEY = String(CFG.supabaseAnonKey || "");
@@ -104,7 +130,9 @@
       clipboard:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>',
       star:'<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
       plus:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
-      trash:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>'
+      trash:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+      sun:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+      moon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>'
     };
     return I[n] || "";
   }
@@ -218,7 +246,14 @@
   }
 
   function loginTpl(){
-    return '<div class="loginShell"><div class="loginCard' + cardCls("login") + '">' +
+    var dark = isDarkTheme();
+    return '<div class="loginShell">' +
+      '<div class="loginThemeWrap" style="position:absolute;top:18px;right:18px;z-index:20;">' +
+        '<button type="button" class="loginThemeBtn" data-action="toggle-theme" style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:#fff;font-size:13px;font-weight:600;cursor:pointer;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);" title="' + (dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro') + '" aria-label="Alternar tema">' +
+          (dark ? icon("sun") : icon("moon")) + ' <span>' + (dark ? 'Modo claro' : 'Modo oscuro') + '</span>' +
+        '</button>' +
+      '</div>' +
+      '<div class="loginCard' + cardCls("login") + '">' +
       '<div class="loginBrand"><img src="' + LOGO + '" alt="Citrojugo"/><div class="loginName">Citrojugo</div><div class="loginSub">Portal del colaborador</div></div>' +
       '<form id="f-login" novalidate>' +
         '<div class="field"><label for="in-num">Número de empleado</label>' +
@@ -353,8 +388,10 @@
 
   function portalTpl(){
     var d = st.data;
+    var dark = isDarkTheme();
     var top = '<header class="topBar"><div class="topInner"><img src="' + LOGO + '" alt=""/>' +
       '<div class="topTitle"><b>Mis resguardos</b><span>Citrojugo · Portal del colaborador</span></div>' +
+      '<button type="button" class="iconBtn" data-action="toggle-theme" aria-label="Cambiar tema" title="' + (dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro') + '">' + (dark ? icon("sun") : icon("moon")) + '<span>' + (dark ? 'Claro' : 'Oscuro') + '</span></button>' +
       '<button type="button" class="iconBtn" data-action="open-pw" aria-label="Cambiar contraseña" title="Cambiar contraseña">' + icon("key") + '<span>Contraseña</span></button>' +
       '<button type="button" class="iconBtn" data-action="logout" aria-label="Cerrar sesión" title="Cerrar sesión">' + icon("logout") + '<span>Salir</span></button>' +
       '</div></header>';
@@ -764,7 +801,7 @@
               (esDirecto ? '<span class="subPill" style="background:var(--fill);">Directo</span>' : '<span class="subPill cascada">Cascada (por ' + esc(titleCase(sub.supervisor_directo || "líder")) + ')</span>') +
               '<span class="subPill' + (activeCount > 0 ? ' hasTools' : '') + '">' + icon("wrench") + ' ' + activeCount + (activeCount === 1 ? ' herramienta' : ' herramientas') + '</span>' +
               (needsRev > 0 ? '<span class="subPill needsReview">' + icon("alert") + ' ' + needsRev + ' por auditar</span>' : '') +
-              (lider.puede_ver_costos && sub.valor_resguardos != null && sub.valor_resguardos > 0 ? '<span class="subPill cost">' + fmtMoney(sub.valor_resguardos) + '</span>' : '') +
+              (lider.puede_ver_costos && sub.valor_resguardos != null ? '<span class="subPill cost" title="Valor económico total en resguardo">' + (sub.valor_resguardos > 0 ? 'Total: ' + fmtMoney(sub.valor_resguardos) : '$0.00') + '</span>' : '') +
             '</div>' +
           '</div>' +
           '<button type="button" class="subExpandBtn" aria-label="' + (isExpanded ? 'Contraer' : 'Expandir') + '">' + icon("chevron") + '</button>' +
@@ -772,7 +809,12 @@
 
       if(isExpanded){
         html += '<div class="subDetail">' +
-          '<div class="subDetailTitle">Herramientas asignadas (Auditoría oficial de Almacén)</div>';
+          '<div class="subDetailTitle">Herramientas asignadas (Auditoría oficial de Almacén)</div>' +
+          (lider.puede_ver_costos && sub.valor_resguardos != null && sub.valor_resguardos > 0 ?
+            '<div style="margin:6px 0 12px;padding:8px 12px;background:var(--tintSoft);border-radius:8px;font-size:13px;display:flex;justify-content:space-between;align-items:center;">' +
+              '<span style="font-weight:600;color:var(--tint);">Responsabilidad patrimonial activa:</span>' +
+              '<span style="font-family:var(--mono);font-weight:700;color:var(--tint);">' + fmtMoney(sub.valor_resguardos) + '</span>' +
+            '</div>' : '');
         if(items.length === 0){
           html += '<p class="hint" style="margin:4px 0 0;">Este colaborador no tiene herramientas activas actualmente.</p>';
         } else {
@@ -1133,6 +1175,7 @@
     touch();
     if(!el) return;
     var a = el.getAttribute("data-action");
+    if(a === "toggle-theme"){ toggleTheme(); return; }
     if(a === "pw-backdrop"){ if(e.target === el && !(st.pwModal && st.pwModal.pending)){ st.pwModal = null; render(); } return; }
     if(a === "responder-invitacion"){
       var liderId = el.getAttribute("data-lider");
