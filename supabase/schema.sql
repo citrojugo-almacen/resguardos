@@ -115,6 +115,8 @@ alter table public.colaboradores add column if not exists huella_registrada bool
 alter table public.colaboradores add column if not exists nivel_jerarquico text not null default 'operativo';
 alter table public.colaboradores add column if not exists puede_auditar boolean not null default false;
 alter table public.colaboradores add column if not exists supervisor_id uuid references public.colaboradores(id);
+alter table public.colaboradores add column if not exists estatus_baja text not null default 'activo' check (estatus_baja in ('activo', 'baja_regular', 'pendiente_cobro', 'saldado'));
+alter table public.colaboradores add column if not exists total_adeudo numeric(12,2) not null default 0.00;
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'colaboradores_numero_empleado_formato') then
     alter table public.colaboradores add constraint colaboradores_numero_empleado_formato
@@ -223,7 +225,7 @@ create table if not exists public.resguardos (
   id_articulo       text not null default '' check (char_length(id_articulo) <= 60),
   fecha_prestamo    date,
   fecha_devolucion  date,
-  estado            text not null default 'activo' check (estado in ('activo', 'devuelto')),
+  estado            text not null default 'activo' check (estado in ('activo', 'devuelto', 'pendiente_cobro')),
   notas             text not null default '' check (char_length(notas) <= 500),
   creado_por        text not null default '',
   creado_por_id     uuid,
@@ -266,6 +268,9 @@ create table if not exists public.constancias (
   resguardos_cerrados int not null default 0,
   codigo             text not null
 );
+alter table public.constancias add column if not exists tipo text not null default 'no_adeudo' check (tipo in ('no_adeudo', 'adeudo'));
+alter table public.constancias add column if not exists total_adeudo numeric(12,2) not null default 0.00;
+alter table public.constancias add column if not exists detalle_adeudo jsonb not null default '[]'::jsonb;
 create index if not exists constancias_colab_idx on public.constancias (colaborador_id, emitida_en desc);
 create index if not exists resguardos_grupo_idx on public.resguardos (grupo_id);
 create index if not exists resguardos_creado_idx on public.resguardos (creado_en desc, id);
@@ -993,37 +998,138 @@ begin
 end $$;
 
 -- ---------- Baja de colaborador (siempre supervisor/admin + contraseña) ----------
--- Siempre requiere supervisor: si almacén pudiera dar de baja y volver a dar de
--- alta a alguien, podría ponerle un NIP que conoce y firmar resguardos a su nombre.
 create or replace function public.baja_colaborador(p_colaborador_id uuid)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
 declare
   v_col public.colaboradores%rowtype;
   v_activos int;
-  v_ids jsonb := '[]'::jsonb;
+  v_monto_adeudo numeric(12,2) := 0.00;
+  v_detalle_adeudo jsonb := '[]'::jsonb;
+  v_c public.constancias%rowtype;
   v_user text;
+  v_cargo text;
 begin
   perform app.exigir(array['admin', 'supervisor'], true);
   v_user := app.nombre_actual();
+
   select * into v_col from public.colaboradores where id = p_colaborador_id and activo for update;
   if not found then
     raise exception using errcode = '22023', message = 'Colaborador no encontrado o ya dado de baja.';
   end if;
-  select count(*) into v_activos from public.resguardos where colaborador_id = p_colaborador_id and estado = 'activo';
-  if v_activos > 0 then
-    with upd as (
-      update public.resguardos
-         set estado = 'devuelto', fecha_devolucion = app.hoy(),
-             devuelto_por = v_user || ' (baja de colaborador)', devuelto_por_id = auth.uid(), actualizado_en = now()
-       where colaborador_id = p_colaborador_id and estado = 'activo'
-      returning id)
-    select coalesce(jsonb_agg(id), '[]'::jsonb) into v_ids from upd;
+
+  select count(*), coalesce(sum(cantidad * costo_unitario), 0.00)
+    into v_activos, v_monto_adeudo
+    from public.resguardos
+   where colaborador_id = p_colaborador_id and estado = 'activo';
+
+  if v_activos = 0 then
+    -- Baja regular sin adeudos
+    update public.colaboradores
+       set activo = false,
+           baja_en = now(),
+           baja_por = auth.uid(),
+           estatus_baja = 'baja_regular',
+           total_adeudo = 0.00
+     where id = p_colaborador_id;
+
+    perform app.log('colaborador_baja', 'colaborador', p_colaborador_id::text,
+      jsonb_build_object('nombre', v_col.nombre, 'tipo', 'sin_adeudo'));
+
+    return jsonb_build_object('ok', true, 'tipo', 'sin_adeudo', 'devueltos', '[]'::jsonb);
+  else
+    -- Baja con adeudo de herramienta: NO se borran ni devuelven, se marcan como pendiente_cobro
+    update public.resguardos
+       set estado = 'pendiente_cobro',
+           actualizado_en = now(),
+           notas = case when notas = '' then 'Baja con adeudo pendiente de cobro' else notas || ' | Baja con adeudo pendiente de cobro' end
+     where colaborador_id = p_colaborador_id and estado = 'activo';
+
+    update public.colaboradores
+       set activo = false,
+           baja_en = now(),
+           baja_por = auth.uid(),
+           estatus_baja = 'pendiente_cobro',
+           total_adeudo = v_monto_adeudo
+     where id = p_colaborador_id;
+
+    -- Compilar detalle de herramientas adeudadas
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'herramienta', r.herramienta,
+      'cantidad', r.cantidad,
+      'id_articulo', r.id_articulo,
+      'costo_unitario', r.costo_unitario,
+      'costo_total', round(r.cantidad * r.costo_unitario, 2),
+      'fecha_prestamo', r.fecha_prestamo
+    )), '[]'::jsonb)
+      into v_detalle_adeudo
+      from public.resguardos r
+     where r.colaborador_id = p_colaborador_id and r.estado = 'pendiente_cobro';
+
+    select coalesce(nullif(p.cargo, ''), case p.rol when 'admin' then 'Administrador' when 'supervisor' then 'Supervisor' else 'Almacén' end)
+      into v_cargo from public.perfiles p where p.id = auth.uid();
+
+    -- Generar Carta de Adeudo automáticamente
+    insert into public.constancias (
+      colaborador_id, emitida_por_id, emitida_por, emitida_por_cargo,
+      resguardos_cerrados, codigo, tipo, total_adeudo, detalle_adeudo
+    ) values (
+      p_colaborador_id, auth.uid(), coalesce(v_user, ''), coalesce(v_cargo, ''),
+      v_activos,
+      upper(substr(encode(extensions.gen_random_bytes(6), 'hex'), 1, 4) || '-' || substr(encode(extensions.gen_random_bytes(6), 'hex'), 1, 4)),
+      'adeudo', v_monto_adeudo, v_detalle_adeudo
+    ) returning * into v_c;
+
+    perform app.log('colaborador_baja_con_adeudo', 'colaborador', p_colaborador_id::text,
+      jsonb_build_object('nombre', v_col.nombre, 'herramientas_adeudadas', v_activos, 'total_adeudo', v_monto_adeudo, 'folio_carta', v_c.folio));
+
+    return jsonb_build_object(
+      'ok', true,
+      'tipo', 'pendiente_cobro',
+      'total_adeudo', v_monto_adeudo,
+      'herramientas_adeudadas', v_activos,
+      'constancia', to_jsonb(v_c)
+    );
   end if;
-  update public.colaboradores set activo = false, baja_en = now(), baja_por = auth.uid() where id = p_colaborador_id;
-  perform app.log('colaborador_baja', 'colaborador', p_colaborador_id::text,
-    jsonb_build_object('nombre', v_col.nombre, 'resguardos_cerrados', jsonb_array_length(v_ids)));
-  return jsonb_build_object('ok', true, 'devueltos', v_ids, 'fecha_devolucion', app.hoy(),
-                            'devuelto_por', coalesce(v_user, '') || ' (baja de colaborador)');
+end $$;
+
+-- ---------- Saldar adeudo de colaborador dado de baja ----------
+create or replace function public.saldar_adeudo_colaborador(
+  p_colaborador_id uuid,
+  p_motivo text default 'Herramienta devuelta o cobrada en finiquito'
+) returns jsonb
+language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_col public.colaboradores%rowtype;
+  v_user text;
+  v_devueltos int;
+begin
+  perform app.exigir(array['admin', 'supervisor'], true);
+  v_user := app.nombre_actual();
+
+  select * into v_col from public.colaboradores where id = p_colaborador_id for update;
+  if not found then
+    raise exception using errcode = '22023', message = 'Colaborador no encontrado.';
+  end if;
+
+  update public.resguardos
+     set estado = 'devuelto',
+         fecha_devolucion = app.hoy(),
+         devuelto_por = v_user || ' (' || coalesce(nullif(p_motivo, ''), 'Adeudo saldado') || ')',
+         devuelto_por_id = auth.uid(),
+         actualizado_en = now()
+   where colaborador_id = p_colaborador_id and estado = 'pendiente_cobro';
+
+  get diagnostics v_devueltos = row_count;
+
+  update public.colaboradores
+     set estatus_baja = 'saldado',
+         total_adeudo = 0.00
+   where id = p_colaborador_id;
+
+  perform app.log('adeudo_saldado', 'colaborador', p_colaborador_id::text,
+    jsonb_build_object('nombre', v_col.nombre, 'herramientas_saldadas', v_devueltos, 'motivo', p_motivo));
+
+  return jsonb_build_object('ok', true, 'herramientas_saldadas', v_devueltos);
 end $$;
 
 -- ---------- Cambiar NIP / desbloquear (supervisor/admin + contraseña) ----------
@@ -2584,6 +2690,7 @@ grant execute on function
   public.transferir_resguardo(uuid, uuid, text, text, uuid),
   public.alta_colaborador(text, text, text, text),
   public.baja_colaborador(uuid),
+  public.saldar_adeudo_colaborador(uuid, text),
   public.cambiar_nip(uuid, text),
   public.migrar_resguardos_area(text, text),
   public.editar_fecha_prestamo(uuid, date),

@@ -39,9 +39,9 @@
     pinFlow: null,
     toast: null,
     pageSize: 40,
-    visible: { activos: 40, historial: 40, catalogo: 40, empleados: 40, tabla: 40, constancias: 40 },
+    visible: { activos: 40, historial: 40, catalogo: 40, empleados: 40, tabla: 40, constancias: 40, cobros: 40 },
     justStamped: [],
-    revFlow: null, audOpen: {}, print: null, cnQuery: "", cnEmpId: "",
+    revFlow: null, audOpen: {}, print: null, cnQuery: "", cnEmpId: "", cobrosQuery: "",
     biometricAvailable: false, biometricDevice: "", enrolarFlow: null
   };
 
@@ -272,7 +272,9 @@
       nipPendiente: !!c.nip_pendiente,
       huellaRegistrada: !!c.huella_registrada,
       nivelJerarquico: String(c.nivel_jerarquico || "operativo"),
-      puedeAuditar: !!c.puede_auditar
+      puedeAuditar: !!c.puede_auditar,
+      estatusBaja: String(c.estatus_baja || "activo"),
+      totalAdeudo: Number(c.total_adeudo || 0)
     };
   }
   var THEME_KEY = "citrojugo_theme";
@@ -356,7 +358,8 @@
       occ: String(r.occ || ""), idArticulo: String(r.id_articulo || ""),
       costoUnitario: puedeVerCostos() ? (parseFloat(r.costo_unitario) || 0) : 0,
       fechaPrestamo: isoDate(r.fecha_prestamo), fechaDevolucion: isoDate(r.fecha_devolucion),
-      estado: r.estado === "devuelto" ? "devuelto" : "activo", notas: String(r.notas || ""),
+      estado: r.estado === "devuelto" ? "devuelto" : (r.estado === "pendiente_cobro" ? "pendiente_cobro" : "activo"),
+      notas: String(r.notas || ""),
       creadoPor: String(r.creado_por || ""), devueltoPor: String(r.devuelto_por || ""),
       creadoEn: String(r.creado_en || ""),
       condicion: CONDICION[r.condicion] ? r.condicion : "",
@@ -387,7 +390,7 @@
     var toolCols = "id,nombre,id_articulo";
     var resCols = RES_COLS;
     return Promise.all([
-      selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada,nivel_jerarquico,puede_auditar", "nombre.asc,id.asc").catch(function(e){
+      selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada,nivel_jerarquico,puede_auditar,estatus_baja,total_adeudo", "nombre.asc,id.asc").catch(function(e){
         if(e.status === 400) return selectAll("colaboradores", "id,numero_empleado,nombre,area,puesto,activo,nip_pendiente,huella_registrada", "nombre.asc,id.asc");
         throw e;
       }),
@@ -401,7 +404,10 @@
       ui.currentUser && ui.currentUser.rol === "admin" ? selectAll("perfiles", "id,email,nombre,rol,cargo,activo", "email.asc") : Promise.resolve(null),
       // Si la base aún no tiene el portal (schema.sql anterior), la app sigue funcionando.
       rpc("estado_portal_colaboradores", {}).catch(function(){ return null; }),
-      selectAll("constancias", "id,folio,colaborador_id,emitida_en,emitida_por,emitida_por_cargo,resguardos_cerrados,codigo", "folio.desc").catch(function(){ return null; }),
+      selectAll("constancias", "id,folio,colaborador_id,emitida_en,emitida_por,emitida_por_cargo,resguardos_cerrados,codigo,tipo,total_adeudo,detalle_adeudo", "folio.desc").catch(function(e){
+        if(e.status === 400) return selectAll("constancias", "id,folio,colaborador_id,emitida_en,emitida_por,emitida_por_cargo,resguardos_cerrados,codigo", "folio.desc");
+        return null;
+      }),
       verCostos ? rpc("obtener_costos_almacen", {}).catch(function(){ return null; }) : Promise.resolve(null)
     ]).then(function(res){
       var all = res[0].filter(okId).map(mapEmployee);
@@ -548,6 +554,7 @@
       print: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>',
       nav_auditoria: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v3H9z"/><polyline points="9 13 11 15 15 11"/></svg>',
       nav_constancias: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/></svg>',
+      nav_cobros: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v12"/><path d="M15 9.5a2.5 2.5 0 0 0-5 0c0 3 5 2 5 5a2.5 2.5 0 0 1-5 0"/></svg>',
       fingerprint: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M9 6.8a6 6 0 0 1 9 5.2c0 .47 0 1.17-.02 2"/><path d="M4 10.95C4 4.5 9 2 12 2s8 2.5 8 8.95"/><path d="M6 14c.08-1.57.5-3.88 1.5-5.5"/><path d="M12 22a10.6 10.6 0 0 0 6-3"/></svg>',
       sun: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
       moon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
@@ -561,6 +568,34 @@
   function getDevueltos(){
     return resguardos.filter(function(r){return r.estado==="devuelto";})
       .sort(function(a,b){ return (b.fechaDevolucion||"").localeCompare(a.fechaDevolucion||""); });
+  }
+  function getPendientesCobro(){
+    var map = {};
+    Object.keys(formerEmployees).forEach(function(id){
+      var e = formerEmployees[id];
+      if(e.estatusBaja === "pendiente_cobro" || e.totalAdeudo > 0) map[id] = e;
+    });
+    employees.forEach(function(e){
+      if(e.estatusBaja === "pendiente_cobro" || e.totalAdeudo > 0) map[e.id] = e;
+    });
+    resguardos.forEach(function(r){
+      if(r.estado === "pendiente_cobro" && !map[r.employeeId]){
+        var emp = empName(r.employeeId);
+        if(emp) map[r.employeeId] = emp;
+      }
+    });
+    return Object.keys(map).map(function(k){ return map[k]; }).sort(function(a,b){ return norm(a.nombre).localeCompare(norm(b.nombre)); });
+  }
+  function getResguardosCobro(empId){
+    return resguardos.filter(function(r){
+      return r.employeeId === empId && r.estado === "pendiente_cobro";
+    });
+  }
+  function getUltimaCartaAdeudo(empId){
+    var list = constancias.filter(function(c){
+      return c.employeeId === empId && c.tipo === "adeudo";
+    }).sort(function(a,b){ return b.folio - a.folio; });
+    return list.length ? list[0] : null;
   }
   function getAllSorted(){
     return resguardos.slice().sort(function(a,b){ return (b.fechaPrestamo||"").localeCompare(a.fechaPrestamo||""); });
@@ -591,11 +626,25 @@
       (r.revisionNota ? ' · '+esc(r.revisionNota) : '')+(r.revisionPor ? ' <span class="dim">('+esc(r.revisionPor)+')</span>' : '')+'</span></p>';
   }
   function fechaLarga(d){ d = d || new Date(); return d.getDate()+' de '+MESES_LARGOS[d.getMonth()]+' de '+d.getFullYear(); }
-  function folioTxt(n){ return "CNA-" + ("000000" + Number(n || 0)).slice(-6); }
+  function folioTxt(n, tipo){ return (tipo === "adeudo" ? "CDA-" : "CNA-") + ("000000" + Number(n || 0)).slice(-6); }
   function mapConstancia(c){
-    return { id: String(c.id), folio: Number(c.folio) || 0, employeeId: String(c.colaborador_id), emitidaEn: String(c.emitida_en || ""),
-             emitidaPor: String(c.emitida_por || ""), emitidaPorCargo: String(c.emitida_por_cargo || ""),
-             cerrados: Number(c.resguardos_cerrados) || 0, codigo: String(c.codigo || "") };
+    var det = c.detalle_adeudo;
+    if(typeof det === "string"){
+      try { det = JSON.parse(det); } catch(e){ det = []; }
+    }
+    return {
+      id: String(c.id),
+      folio: Number(c.folio) || 0,
+      employeeId: String(c.colaborador_id),
+      emitidaEn: String(c.emitida_en || ""),
+      emitidaPor: String(c.emitida_por || ""),
+      emitidaPorCargo: String(c.emitida_por_cargo || ""),
+      cerrados: Number(c.resguardos_cerrados) || 0,
+      codigo: String(c.codigo || ""),
+      tipo: String(c.tipo || "no_adeudo"),
+      totalAdeudo: Number(c.total_adeudo || 0),
+      detalleAdeudo: Array.isArray(det) ? det : []
+    };
   }
   function diasNum(iso){ if(!iso) return 0; return Math.max(0, Math.floor((new Date(todayISO()+"T00:00:00") - new Date(String(iso).slice(0,10)+"T00:00:00"))/86400000)); }
 
@@ -740,9 +789,11 @@
     var page = paginate(list, "constancias");
     html += '<div class="cardGrid listGroup">' + page.shown.map(function(c){
       var e = empName(c.employeeId);
-      return '<div class="empCard"><span class="cnFolio code">'+folioTxt(c.folio)+'</span><div style="min-width:0;flex:1;"><div class="name">'+(e?esc(e.nombre):'—')+'</div>' +
+      var isAdeudo = c.tipo === "adeudo";
+      var tipoBadge = isAdeudo ? '<span class="badgeBio" style="background:#FFF3DC;color:#B45309;font-weight:700;margin-left:6px;">Adeudo: $'+Number(c.totalAdeudo||0).toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+'</span>' : '';
+      return '<div class="empCard"><span class="cnFolio code" style="'+(isAdeudo?'color:#B45309;font-weight:700;':'')+'">'+folioTxt(c.folio, c.tipo)+'</span><div style="min-width:0;flex:1;"><div class="name">'+(e?esc(e.nombre):'—')+tipoBadge+'</div>' +
         '<div class="area">'+(e&&e.numero?'#'+esc(e.numero)+' · ':'')+fmt(c.emitidaEn.slice(0,10))+' · '+esc(c.emitidaPor)+'</div></div>' +
-        '<button type="button" class="link" data-action="cn-reprint" data-id="'+c.id+'" style="font-size:13px;">'+icon("print")+' Reimprimir</button></div>';
+        '<button type="button" class="link" data-action="cn-reprint" data-id="'+c.id+'" style="font-size:13px;">'+icon("print")+' '+(isAdeudo?'Carta de adeudo':'Reimprimir')+'</button></div>';
     }).join("") + '</div>';
     if(page.hasMore) html += loadMoreBtn("constancias", (page.total-page.shown.length)+' restantes');
     return html;
@@ -796,11 +847,59 @@
       '<footer class="shFoot">Registra cada resultado en la sección Auditoría (botón Revisar) para que quede en el sistema.</footer>' +
     '</article>';
   }
+  function cartaAdeudoSheet(c, copia){
+    var e = empName(c.employeeId) || {};
+    var fecha = new Date(c.emitidaEn || Date.now());
+    var items = Array.isArray(c.detalleAdeudo) && c.detalleAdeudo.length ? c.detalleAdeudo : [];
+    if(!items.length){
+      items = resguardos.filter(function(r){ return r.employeeId === c.employeeId && (r.estado === "pendiente_cobro" || r.estado === "activo"); }).map(function(r){
+        return {
+          herramienta: r.herramienta,
+          cantidad: r.cantidad,
+          id_articulo: r.idArticulo,
+          costo_unitario: r.costoUnitario,
+          costo_total: Math.round(r.cantidad * (r.costoUnitario || 0) * 100) / 100
+        };
+      });
+    }
+    var total = Number(c.totalAdeudo) || items.reduce(function(acc, it){ return acc + (Number(it.costo_total) || (Number(it.cantidad || 1) * Number(it.costo_unitario || 0))); }, 0);
+
+    return '<article class="sheet sheetList">' +
+      '<header class="shHead"><img src="'+LOGO+'" alt="Citrojugo"/><div><b>Citrojugo</b><span>Almacén General · Notificación de adeudo de resguardo</span></div>' +
+        '<dl><dt>Folio</dt><dd>'+folioTxt(c.folio, "adeudo")+'</dd><dt>Fecha</dt><dd>'+fechaLarga(fecha)+'</dd></dl></header>' +
+      (copia ? '<p class="shCopy">Reimpresión de carta de adeudo emitida el '+fechaLarga(fecha)+'</p>' : '') +
+      '<h1 class="shTitle" style="color:#A11E22;margin-bottom:8px;">Carta de Adeudo de Herramienta y Equipo</h1>' +
+      '<p class="shSub" style="color:#5E5E63;margin-bottom:16px;">Retención en finiquito / liquidación por herramientas no entregadas a la baja del trabajador</p>' +
+      '<p style="font-size:10pt;margin-bottom:10px;">Por medio de la presente, el Departamento de Almacén notifica formalmente a <b>Recursos Humanos y Nóminas</b> que el colaborador <b>'+esc(e.nombre||"")+'</b>, con número de empleado <b>'+esc(e.numero||"")+'</b>' +
+        (e.puesto ? ', puesto <b>'+esc(e.puesto)+'</b>' : '') + (e.area ? ', adscrito al área <b>'+esc(e.area)+'</b>' : '') +
+        ', ha causado baja de la organización manteniendo bajo su resguardo las siguientes herramientas y equipos de trabajo sin haber efectuado la entrega correspondiente en almacén:</p>' +
+      '<table class="shTable" style="margin-bottom:12px;"><thead><tr><th style="width:24px;">#</th><th>Descripción de herramienta / equipo</th><th style="width:90px;">Código AX</th><th style="width:40px;text-align:center;">Cant.</th><th style="width:85px;text-align:right;">P. Unitario</th><th style="width:95px;text-align:right;">Importe MXN</th></tr></thead><tbody>' +
+      items.map(function(it, i){
+        var pu = Number(it.costo_unitario) || 0;
+        var cant = Number(it.cantidad) || 1;
+        var sub = Number(it.costo_total) || (cant * pu);
+        return '<tr><td>'+(i+1)+'</td><td>'+esc(it.herramienta||"")+'</td><td class="code">'+esc(it.id_articulo||"—")+'</td><td style="text-align:center;">'+cant+'</td><td style="text-align:right;">$'+pu.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+'</td><td style="text-align:right;font-weight:600;">$'+sub.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+'</td></tr>';
+      }).join("") +
+      '</tbody><tfoot>' +
+      '<tr style="background:#FFF3DC;font-weight:700;"><td colspan="5" style="text-align:right;padding:8px;">TOTAL A DESCONTAR / RETENER EN FINIQUITO:</td><td style="text-align:right;color:#A11E22;font-size:10.5pt;padding:8px;">$'+total.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+' MXN</td></tr>' +
+      '</tfoot></table>' +
+      '<p style="font-size:9.5pt;color:#333;margin-bottom:16px;line-height:1.45;">El importe total anterior deberá ser retenido del finiquito correspondiente. En caso de que el colaborador haga entrega física de los equipos en almacén antes del pago, el almacén registrará la devolución en sistema, saldará el adeudo y emitirá la constancia de no adeudo.</p>' +
+      '<div class="shSigns" style="display:grid;grid-template-columns:1fr 1fr;row-gap:28px;column-gap:40px;padding-top:16px;margin-top:auto;">' +
+        '<div><span class="shLine"></span><b>'+esc(c.emitidaPor||"Almacén General")+'</b><span>'+esc(c.emitidaPorCargo||"Almacén")+' · Expide y notifica</span></div>' +
+        '<div><span class="shLine"></span><b>'+esc(e.nombre||"")+'</b><span>Colaborador · No. #'+esc(e.numero||"")+'<br/>Acepta adeudo y retención</span></div>' +
+        '<div><span class="shLine"></span><b>Supervisor de Almacén</b><span>Vo. Bo. Control de Inventarios</span></div>' +
+        '<div><span class="shLine"></span><b>Recursos Humanos / Nóminas</b><span>Recibe para aplicación en finiquito</span></div>' +
+      '</div>' +
+      '<footer class="shFoot">Folio '+folioTxt(c.folio, "adeudo")+' · Código de verificación '+esc(c.codigo)+'. Documento emitido desde el Sistema de Resguardos de Citrojugo Almacén. Válido con firmas autógrafas.</footer>' +
+    '</article>';
+  }
   function printTpl(){
     var p = ui.print; if(!p) return "";
-    var sheet = p.tipo === "constancia" ? constanciaSheet(p.c, p.copia) : checklistSheet(p.grupo);
+    var isAdeudo = (p.tipo === "adeudo") || (p.c && p.c.tipo === "adeudo");
+    var sheet = isAdeudo ? cartaAdeudoSheet(p.c, p.copia) : (p.tipo === "constancia" ? constanciaSheet(p.c, p.copia) : checklistSheet(p.grupo));
+    var title = isAdeudo ? ('Carta de adeudo ' + folioTxt(p.c.folio, "adeudo")) : (p.tipo === "constancia" ? ('Constancia ' + folioTxt(p.c.folio)) : 'Lista de verificación');
     return '<div class="printOverlay" role="dialog" aria-modal="true" aria-label="Vista de impresión">' +
-      '<div class="printBar"><b>'+(p.tipo === "constancia" ? 'Constancia '+folioTxt(p.c.folio) : 'Lista de verificación')+'</b><span>Tamaño carta</span>' +
+      '<div class="printBar"><b>'+title+'</b><span>Tamaño carta</span>' +
         '<button type="button" class="btnPrimary" data-action="print-now">'+icon("print")+' Imprimir</button>' +
         '<button type="button" class="closeBtn" data-action="print-close" aria-label="Cerrar">'+icon("x")+'</button></div>' +
       '<div class="printStage">'+sheet+'</div></div>';
@@ -817,7 +916,8 @@
       {id:"historial", label:"Historial"},
       {id:"tabla", label:"Tabla completa"},
       {id:"auditoria", label:"Auditoría", badge: auditGroups().filter(function(g){ return g.prio === "alta"; }).reduce(function(s, g){ return s + g.items.length; }, 0)},
-      {id:"constancias", label:"Constancias", badge: constancias.length}
+      {id:"constancias", label:"Constancias", badge: constancias.length},
+      {id:"cobros", label:"Pendientes de cobro", badge: getPendientesCobro().length}
     ];
     if(ui.currentUser && ui.currentUser.rol === "admin"){
       tabs.push({id:"usuarios", label:"Usuarios", badge:users.length});
@@ -958,7 +1058,7 @@
         html += '<div class="recentRow"><div class="avatar avatarLg '+(emp?avatarColorClass(emp.nombre):"")+'">'+(emp?esc(initials(emp.nombre)):"?")+'</div><div class="recentMain">' +
           '<div class="recentTitle">'+esc(r.herramienta)+'</div>' +
           '<div class="recentSub">'+(emp?esc(emp.nombre):"—")+' · '+fmtShort(r.fechaPrestamo)+'</div>' +
-          '</div><span class="statusChip '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+'</span></div>';
+          '</div><span class="statusChip '+r.estado+'">'+(r.estado==="activo"?"Activo":(r.estado==="pendiente_cobro"?"Pendiente cobro":"Devuelto"))+'</span></div>';
       });
     }
     html += '</div>';
@@ -978,7 +1078,7 @@
     '<div class="resCard '+r.estado+(renderStamp[r.id]?' stamped':'')+'">' +
       '<div class="resTop">' +
         '<div style="min-width:0;"><div class="resTitle">'+esc(r.herramienta)+(r.cantidad>1?'<span class="qty">×'+r.cantidad+'</span>':'')+'</div>'+(r.condicion?'<div style="margin-top:6px;">'+condChip(r.condicion)+'</div>':'')+'</div>' +
-        '<span class="pill '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+
+        '<span class="pill '+r.estado+'">'+(r.estado==="activo"?"Activo":(r.estado==="pendiente_cobro"?"Pendiente cobro":"Devuelto"))+
           (renderStamp[r.id] ? '<span class="burst" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>' : '')+'</span>' +
       '</div>' +
       '<div class="empRow"><div class="avatar '+(emp?avatarColorClass(emp.nombre):"")+'">'+(emp?esc(initials(emp.nombre)):"?")+'</div>' +
@@ -1262,9 +1362,9 @@
       var activosEmp = resguardos.filter(function(r){return r.employeeId===emp.id && r.estado==="activo";}).length;
       var costoEmp = verCostos ? empCostoTotal(emp.id) : 0;
       if(ui.confirmDeleteEmpId === emp.id){
-        html += '<div class="confirmBox" style="grid-column:1/-1;margin:0;"><p>¿Eliminar a <b>'+esc(emp.nombre)+'</b>?' +
-          (activosEmp>0 ? ' Tiene '+activosEmp+' herramienta(s) en resguardo activo; se marcarán como devueltas.' : '') + ' Se pedirá autorización de un supervisor o administrador.</p>' +
-          '<div class="confirmActions"><button class="confirmYes" data-action="confirm-delete-employee" data-id="'+emp.id+'">Sí, eliminar</button>' +
+        html += '<div class="confirmBox" style="grid-column:1/-1;margin:0;"><p>¿Dar de baja a <b>'+esc(emp.nombre)+'</b>?' +
+          (activosEmp>0 ? ' Tiene '+activosEmp+' herramienta(s) en resguardo activo; no se borrará, se marcará con <b>pendiente de cobro</b> y se emitirá la Carta de Adeudo para finiquito.' : '') + ' Se pedirá autorización de un supervisor o administrador.</p>' +
+          '<div class="confirmActions"><button class="confirmYes" data-action="confirm-delete-employee" data-id="'+emp.id+'">Sí, dar de baja</button>' +
           '<button class="confirmNo" data-action="cancel-delete-employee">Cancelar</button></div></div>';
       } else {
         var lvlBadge = '';
@@ -1370,6 +1470,7 @@
             '<option value="todos"'+(fEstado==="todos"?' selected':'')+'>Todos</option>' +
             '<option value="activo"'+(fEstado==="activo"?' selected':'')+'>Activos</option>' +
             '<option value="devuelto"'+(fEstado==="devuelto"?' selected':'')+'>Devueltos</option>' +
+            '<option value="pendiente_cobro"'+(fEstado==="pendiente_cobro"?' selected':'')+'>Pendiente de cobro</option>' +
           '</select>' +
         '</div>' +
         '<div class="filterGroup">' +
@@ -1441,7 +1542,7 @@
           '<td class="code">'+(r.occ?esc(r.occ):"—")+'</td>' +
           '<td class="code">'+(r.idArticulo?esc(r.idArticulo):"—")+'</td>' +
           costCell +
-          '<td><span class="estado '+r.estado+'">'+(r.estado==="activo"?"Activo":"Devuelto")+'</span></td>' +
+          '<td><span class="estado '+r.estado+'">'+(r.estado==="activo"?"Activo":(r.estado==="pendiente_cobro"?"Pendiente cobro":"Devuelto"))+'</span></td>' +
           '<td>'+fmtShort(r.fechaDevolucion)+'</td>' +
           '<td class="dim">'+(r.creadoPor?esc(r.creadoPor):"—")+'</td>' +
           '<td class="clip dim" title="'+(r.notas?esc(r.notas):"")+'">'+(r.notas?esc(r.notas):"—")+'</td>' +
@@ -1651,6 +1752,7 @@
       "quitar-sin-pin": "Autorizar remoción de resguardo",
       "delete-employee-cascade": "Autorizar baja de colaborador",
       "delete-employee": "Autorizar baja de colaborador",
+      "saldar-adeudo": "Autorizar liquidación de adeudo",
       "cambiar-nip": "Asignar o cambiar NIP",
       "admin-user": "Confirmar cambio de cuenta",
       "reset-portal": "Restablecer acceso al portal"
@@ -1658,8 +1760,9 @@
     var subtitles = {
       "devolver-item": "Esta acción cierra el resguardo.",
       "quitar-sin-pin": "Esta acción libera la herramienta sin pasar por el colaborador. Requiere correo y contraseña de un supervisor o administrador.",
-      "delete-employee-cascade": "Este colaborador tiene herramienta en resguardo activa; se marcará como devuelta al eliminarlo. Requiere correo y contraseña de un supervisor o administrador.",
+      "delete-employee-cascade": "Este colaborador tiene herramientas en resguardo. No se borrarán: se marcarán con pendiente de cobro y se generará la Carta de Adeudo para finiquito. Requiere correo y contraseña de un supervisor o administrador.",
       "delete-employee": "Dar de baja a un colaborador requiere correo y contraseña de un supervisor o administrador. Su historial se conserva.",
+      "saldar-adeudo": "Esta acción marcará las herramientas retenidas como devueltas y liquidará el saldo adeudado del colaborador. Requiere correo y contraseña de un supervisor o administrador.",
       "cambiar-nip": "Asigna un NIP nuevo y desbloquea al colaborador si estaba bloqueado por intentos fallidos. Requiere correo y contraseña de un supervisor o administrador.",
       "admin-user": "Confirma con tu correo y contraseña de administrador.",
       "reset-portal": "Úsalo si el colaborador olvidó su contraseña o quedó bloqueado. Su contraseña vuelve a ser su número de empleado, por una sola vez, y deberá crear una nueva al entrar. Si su NIP lo creó él desde el portal, también se anula y deberá crear otro. Requiere correo y contraseña de un supervisor o administrador."
@@ -1930,10 +2033,145 @@
     }
   }
 
+  // ---------- Pendientes de cobro (bajas con adeudo) ----------
+  function cobrosTpl(){
+    var pendientes = getPendientesCobro();
+    var q = (ui.cobrosQuery || "").trim();
+    if(q){
+      pendientes = pendientes.filter(function(e){ return empMatches(e, q); });
+    }
+
+    var allPendientes = getPendientesCobro();
+    var totalPersonas = allPendientes.length;
+    var totalPiezas = 0;
+    var totalDinero = 0;
+
+    allPendientes.forEach(function(p){
+      var rList = getResguardosCobro(p.id);
+      if(rList.length){
+        rList.forEach(function(r){
+          totalPiezas += (r.cantidad || 1);
+          totalDinero += ((r.cantidad || 1) * (r.costoUnitario || findToolCost(r.idArticulo, r.herramienta) || 0));
+        });
+      } else if(p.totalAdeudo > 0){
+        totalDinero += p.totalAdeudo;
+      }
+    });
+
+    var html = '<div class="metricGrid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:18px;">' +
+      '<div class="metric m-amber"><div class="metricLabel">Personas con adeudo</div><div class="metricValue">'+totalPersonas.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-teal"><div class="metricLabel">Herramientas por recuperar</div><div class="metricValue">'+totalPiezas.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-lime"><div class="metricLabel">Monto pendiente de cobro</div><div class="metricValue">$'+totalDinero.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+' MXN</div></div>' +
+    '</div>';
+
+    html += '<div class="searchWrap" style="max-width:480px;margin-bottom:16px;"><span class="searchIcon">'+icon("search")+'</span>' +
+      '<input type="text" id="input-cobros-query" placeholder="Buscar por colaborador o número de empleado ('+pendientes.length+' encontrados)" value="'+esc(ui.cobrosQuery||"")+'"/></div>';
+
+    if(!pendientes.length){
+      html += '<p class="empty" style="padding:40px 16px;text-align:center;">'+(q ? 'No hay colaboradores con adeudo que coincidan con "'+esc(q)+'".' : 'No hay colaboradores dados de baja con adeudos pendientes de cobro.')+'</p>';
+      return html;
+    }
+
+    var page = paginate(pendientes, "cobros");
+    var canManage = ui.currentUser && (ui.currentUser.rol === "admin" || ui.currentUser.rol === "supervisor");
+
+    html += '<div style="display:flex;flex-direction:column;gap:16px;">';
+    page.shown.forEach(function(emp){
+      var rList = getResguardosCobro(emp.id);
+      var carta = getUltimaCartaAdeudo(emp.id);
+      var subtotal = rList.reduce(function(acc, r){
+        return acc + ((r.cantidad || 1) * (r.costoUnitario || findToolCost(r.idArticulo, r.herramienta) || 0));
+      }, 0) || emp.totalAdeudo || 0;
+
+      html += '<div class="card" style="margin:0;padding:18px 20px;border-left:4px solid #D97706;background:var(--surface);border-radius:var(--r-md);box-shadow:var(--shadow-1);">' +
+        '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:12px;">' +
+          '<div style="display:flex;align-items:center;gap:12px;">' +
+            avatarTpl(emp, "avatarLg") +
+            '<div>' +
+              '<div style="font-size:16px;font-weight:700;color:var(--label);display:flex;align-items:center;gap:8px;">' +
+                esc(emp.nombre) +
+                '<span class="chip chip-amber" style="font-size:11px;background:#FFF3DC;color:#B45309;padding:2px 8px;border-radius:999px;font-weight:700;">Pendiente de cobro</span>' +
+              '</div>' +
+              '<div style="font-size:13px;color:var(--label2);margin-top:2px;">' +
+                (emp.numero ? '<span class="code">#'+esc(emp.numero)+'</span> · ' : '') +
+                (emp.puesto ? esc(emp.puesto)+' · ' : '') +
+                (emp.area ? esc(emp.area) : '') +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div style="text-align:right;">' +
+            '<div style="font-size:11.5px;color:var(--label3);text-transform:uppercase;font-weight:700;letter-spacing:.02em;">Total adeudado</div>' +
+            '<div style="font-size:20px;font-weight:700;color:#A11E22;font-family:var(--mono);">$'+subtotal.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+' MXN</div>' +
+          '</div>' +
+        '</div>';
+
+      if(rList.length){
+        html += '<div class="tableScroll" style="margin:8px 0 14px;"><table style="width:100%;font-size:13px;border-collapse:collapse;">' +
+          '<thead><tr style="border-bottom:1px solid var(--sep);text-align:left;color:var(--label3);">' +
+            '<th style="padding:6px 8px;">Herramienta</th>' +
+            '<th style="padding:6px 8px;width:110px;">Código AX</th>' +
+            '<th style="padding:6px 8px;width:60px;text-align:center;">Cant.</th>' +
+            '<th style="padding:6px 8px;width:95px;text-align:right;">P. Unitario</th>' +
+            '<th style="padding:6px 8px;width:110px;text-align:right;">Subtotal</th>' +
+          '</tr></thead><tbody>';
+        rList.forEach(function(r){
+          var pu = r.costoUnitario || findToolCost(r.idArticulo, r.herramienta) || 0;
+          var cant = r.cantidad || 1;
+          var st = cant * pu;
+          html += '<tr style="border-bottom:1px solid var(--sep);">' +
+            '<td style="padding:6px 8px;font-weight:600;">'+esc(r.herramienta)+'</td>' +
+            '<td style="padding:6px 8px;font-family:var(--mono);font-size:12px;">'+esc(r.idArticulo||"—")+'</td>' +
+            '<td style="padding:6px 8px;text-align:center;">'+cant+'</td>' +
+            '<td style="padding:6px 8px;text-align:right;font-family:var(--mono);">$'+pu.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+'</td>' +
+            '<td style="padding:6px 8px;text-align:right;font-weight:700;font-family:var(--mono);color:#A11E22;">$'+st.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+'</td>' +
+          '</tr>';
+        });
+        html += '</tbody></table></div>';
+      } else if(carta && Array.isArray(carta.detalleAdeudo) && carta.detalleAdeudo.length){
+        html += '<div class="tableScroll" style="margin:8px 0 14px;"><table style="width:100%;font-size:13px;border-collapse:collapse;">' +
+          '<thead><tr style="border-bottom:1px solid var(--sep);text-align:left;color:var(--label3);">' +
+            '<th style="padding:6px 8px;">Herramienta</th>' +
+            '<th style="padding:6px 8px;width:110px;">Código AX</th>' +
+            '<th style="padding:6px 8px;width:60px;text-align:center;">Cant.</th>' +
+            '<th style="padding:6px 8px;width:95px;text-align:right;">P. Unitario</th>' +
+            '<th style="padding:6px 8px;width:110px;text-align:right;">Subtotal</th>' +
+          '</tr></thead><tbody>';
+        carta.detalleAdeudo.forEach(function(it){
+          var pu = Number(it.costo_unitario) || 0;
+          var cant = Number(it.cantidad) || 1;
+          var st = Number(it.costo_total) || (cant * pu);
+          html += '<tr style="border-bottom:1px solid var(--sep);">' +
+            '<td style="padding:6px 8px;font-weight:600;">'+esc(it.herramienta)+'</td>' +
+            '<td style="padding:6px 8px;font-family:var(--mono);font-size:12px;">'+esc(it.id_articulo||"—")+'</td>' +
+            '<td style="padding:6px 8px;text-align:center;">'+cant+'</td>' +
+            '<td style="padding:6px 8px;text-align:right;font-family:var(--mono);">$'+pu.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+'</td>' +
+            '<td style="padding:6px 8px;text-align:right;font-weight:700;font-family:var(--mono);color:#A11E22;">$'+st.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2})+'</td>' +
+          '</tr>';
+        });
+        html += '</tbody></table></div>';
+      }
+
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:10px;padding-top:10px;border-top:1px solid var(--sep);">' +
+        '<div>' +
+          (carta ? '<span style="font-size:12.5px;color:var(--label2);">Carta folio <b class="code">'+folioTxt(carta.folio, "adeudo")+'</b> ('+fmt(carta.emitidaEn.slice(0,10))+')</span>' : '<span style="font-size:12.5px;color:var(--label3);">Sin folio de carta emitido</span>') +
+        '</div>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          (carta ? '<button type="button" class="btnGhost" data-action="print-carta-adeudo" data-id="'+carta.id+'" style="font-size:13px;padding:6px 12px;">'+icon("print")+' Imprimir Carta de Adeudo</button>' :
+                   '<button type="button" class="btnGhost" data-action="print-carta-preview" data-id="'+emp.id+'" style="font-size:13px;padding:6px 12px;">'+icon("print")+' Vista Carta de Adeudo</button>') +
+          (canManage ? '<button type="button" class="btnPrimary" data-action="saldar-adeudo-click" data-id="'+emp.id+'" style="font-size:13px;padding:6px 14px;background:#2E7D32;">'+icon("check")+' Saldar adeudo / Marcar devuelto</button>' : '') +
+        '</div>' +
+      '</div></div>';
+    });
+    html += '</div>';
+
+    if(page.hasMore) html += loadMoreBtn("cobros", (page.total-page.shown.length)+' restantes');
+    return html;
+  }
+
   var tabRenderers = {
     dashboard: dashboardTpl, activos: activosTpl, nuevo: nuevoTpl,
     catalogo: catalogoTpl, empleados: empleadosTpl, historial: historialTpl, tabla: tablaTpl,
-    usuarios: usersTpl, auditoria: auditoriaTpl, constancias: constanciasTpl
+    usuarios: usersTpl, auditoria: auditoriaTpl, constancias: constanciasTpl, cobros: cobrosTpl
   };
 
   function render(){
@@ -2188,6 +2426,7 @@
     if(f.kind === "devolver-item")  return rpc("devolver_resguardo", { p_resguardo_id: p.resguardoId, p_tipo: "devolucion" }, token).then(function(r){ return { rows: [r] }; });
     if(f.kind === "quitar-sin-pin") return rpc("devolver_resguardo", { p_resguardo_id: p.resguardoId, p_tipo: "ajuste" }, token).then(function(r){ return { rows: [r] }; });
     if(f.kind === "delete-employee-cascade" || f.kind === "delete-employee") return rpc("baja_colaborador", { p_colaborador_id: p.employeeId }, token);
+    if(f.kind === "saldar-adeudo") return rpc("saldar_adeudo_colaborador", { p_colaborador_id: p.employeeId, p_motivo: p.motivo || "Herramienta entregada o cobrada en finiquito" }, token);
     if(f.kind === "cambiar-nip") return rpc("cambiar_nip", { p_colaborador_id: p.employeeId, p_nip: f.pin }, token);
     if(f.kind === "admin-user")  return rpc("admin_actualizar_usuario", { p_id: p.userId, p_rol: p.rol, p_activo: !!p.activo }, token);
     if(f.kind === "reset-portal") return rpc("restablecer_portal_colaborador", { p_colaborador_id: p.employeeId }, token);
@@ -2203,16 +2442,59 @@
       var who = result.rows && result.rows[0] ? result.rows[0].devuelto_por : "";
       toast("ok", f.kind === "devolver-item" ? "Devolución autorizada" + (who ? " por " + who : "") + "." : "Herramienta quitada del resguardo.");
     } else if(f.kind === "delete-employee-cascade" || f.kind === "delete-employee"){
-      var ids = {}; (result.devueltos || []).forEach(function(id){ ids[String(id)] = true; });
-      resguardos.forEach(function(r){
-        if(ids[r.id]){ r.estado = "devuelto"; r.fechaDevolucion = isoDate(result.fecha_devolucion) || todayISO(); r.devueltoPor = String(result.devuelto_por || ""); }
-      });
       var emp = empName(f.payload.employeeId);
-      if(emp){ formerEmployees[emp.id] = emp; }
-      employees = employees.filter(function(e){ return e.id !== f.payload.employeeId; });
-      ui.confirmDeleteEmpId = null; ui.viewEmployeeToolsId = null;
-      var nDev = Object.keys(ids).length;
-      toast("ok", nDev ? "Colaborador dado de baja y "+nDev+" herramienta(s) marcada(s) como devuelta(s)." : "Colaborador dado de baja.");
+      if(result && result.tipo === "pendiente_cobro"){
+        resguardos.forEach(function(r){
+          if(r.employeeId === f.payload.employeeId && r.estado === "activo"){
+            r.estado = "pendiente_cobro";
+          }
+        });
+        if(emp){
+          emp.activo = false;
+          emp.estatusBaja = "pendiente_cobro";
+          emp.totalAdeudo = Number(result.total_adeudo || 0);
+          formerEmployees[emp.id] = emp;
+        }
+        employees = employees.filter(function(e){ return e.id !== f.payload.employeeId; });
+        ui.confirmDeleteEmpId = null; ui.viewEmployeeToolsId = null;
+        if(result.constancia){
+          var mc = mapConstancia(result.constancia);
+          constancias.unshift(mc);
+          ui.print = { tipo: "adeudo", c: mc, copia: false };
+        }
+        toast("ok", "Colaborador dado de baja con pendiente de cobro ($" + Number(result.total_adeudo||0).toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2}) + " MXN) y Carta de Adeudo generada.");
+      } else {
+        var ids = {}; (result.devueltos || []).forEach(function(id){ ids[String(id)] = true; });
+        resguardos.forEach(function(r){
+          if(ids[r.id]){ r.estado = "devuelto"; r.fechaDevolucion = isoDate(result.fecha_devolucion) || todayISO(); r.devueltoPor = String(result.devuelto_por || ""); }
+        });
+        if(emp){
+          emp.activo = false;
+          emp.estatusBaja = "baja_regular";
+          formerEmployees[emp.id] = emp;
+        }
+        employees = employees.filter(function(e){ return e.id !== f.payload.employeeId; });
+        ui.confirmDeleteEmpId = null; ui.viewEmployeeToolsId = null;
+        var nDev = Object.keys(ids).length;
+        toast("ok", nDev ? "Colaborador dado de baja y "+nDev+" herramienta(s) marcada(s) como devuelta(s)." : "Colaborador dado de baja.");
+      }
+    } else if(f.kind === "saldar-adeudo"){
+      var sEmpId = f.payload.employeeId;
+      var devCount = 0;
+      resguardos.forEach(function(r){
+        if(r.employeeId === sEmpId && r.estado === "pendiente_cobro"){
+          r.estado = "devuelto";
+          r.fechaDevolucion = todayISO();
+          r.devueltoPor = (ui.currentUser ? ui.currentUser.username : "Almacén") + " (Adeudo saldado)";
+          devCount++;
+        }
+      });
+      var sEmp = empName(sEmpId);
+      if(sEmp){
+        sEmp.estatusBaja = "saldado";
+        sEmp.totalAdeudo = 0;
+      }
+      toast("ok", "Adeudo saldado (" + devCount + " herramienta(s) devuelta(s)) y cuenta liquidada.");
     } else if(f.kind === "cambiar-nip"){
       var e2 = empName(f.payload.employeeId); if(e2) e2.nipPendiente = false;
       toast("ok","NIP actualizado y desbloqueado.");
@@ -2796,7 +3078,34 @@
         case "cn-pick": ui.cnEmpId = id; var cpe = empName(id); if(cpe) ui.cnQuery = cpe.numero || cpe.nombre; render(); break;
         case "cn-goto": ui.cnEmpId = id; var cge = empName(id); ui.cnQuery = cge ? (cge.numero || cge.nombre) : ""; setTab("constancias"); break;
         case "cn-emit": emitirConstancia(id); break;
-        case "cn-reprint": { var rc = constancias.filter(function(c){ return c.id === id; })[0]; if(rc){ ui.print = { tipo: "constancia", c: rc, copia: true }; render(); } break; }
+        case "cn-reprint": { var rc = constancias.filter(function(c){ return c.id === id; })[0]; if(rc){ ui.print = { tipo: rc.tipo === "adeudo" ? "adeudo" : "constancia", c: rc, copia: true }; render(); } break; }
+        case "print-carta-adeudo": { var rca = constancias.filter(function(c){ return c.id === id; })[0]; if(rca){ ui.print = { tipo: "adeudo", c: rca, copia: true }; render(); } break; }
+        case "print-carta-preview": {
+          var previewEmp = empName(id);
+          if(previewEmp){
+            var prevC = {
+              folio: 0,
+              employeeId: previewEmp.id,
+              emitidaEn: todayISO(),
+              emitidaPor: ui.currentUser ? ui.currentUser.username : "Almacén",
+              emitidaPorCargo: "Almacén General",
+              tipo: "adeudo",
+              totalAdeudo: previewEmp.totalAdeudo || 0,
+              detalleAdeudo: []
+            };
+            ui.print = { tipo: "adeudo", c: prevC, copia: false };
+            render();
+          }
+          break;
+        }
+        case "saldar-adeudo-click": {
+          var sEmp = empName(id);
+          if(sEmp){
+            openAuth("saldar-adeudo", { employeeId: id, empNombre: sEmp.nombre });
+          }
+          break;
+        }
+        case "clear-cobros-query": { ui.cobrosQuery = ""; render(); break; }
         case "print-now": try{ window.print(); }catch(e3){} break;
         case "print-close": ui.print = null; render(); break;
         case "auth-cancel": if(ui.authFlow && !ui.authFlow.pending){ ui.authFlow = null; render(); } break;
@@ -2876,6 +3185,7 @@
       case "input-search-table": ui.tableQuery = v; ui.visible.tabla = ui.pageSize; render(); break;
       case "input-search-catalog": ui.catQuery = v; ui.visible.catalogo = ui.pageSize; render(); break;
       case "input-search-employees": ui.empListQuery = v; ui.visible.empleados = ui.pageSize; render(); break;
+      case "input-cobros-query": ui.cobrosQuery = v; ui.visible.cobros = ui.pageSize; render(); break;
       case "input-cat-nombre": ui.catForm.nombre = v; break;
       case "input-cat-idarticulo": ui.catForm.idArticulo = v; break;
       case "input-cat-costo": ui.catForm.costo = v; break;

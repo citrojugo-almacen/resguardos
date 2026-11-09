@@ -309,6 +309,8 @@
   .pill.activo{color:var(--okInk);background:var(--okBg);}
   .pill.activo::before{background:var(--okLine);box-shadow:0 0 0 2px rgba(139,197,63,.25);}
   .pill.devuelto{color:var(--label2);background:#ECECF0;}
+  .pill.pendiente_cobro{color:#92400E;background:#FEF3C7;}
+  .pill.pendiente_cobro::before{background:#F59E0B;box-shadow:0 0 0 2px rgba(245,158,11,.25);}
 
   /* Insignia de costo (exclusiva supervisión y gerencia) */
   .priceTag{display:inline-flex;align-items:center;padding:2px 7px;border-radius:6px;font-size:11.5px;font-weight:600;font-family:var(--mono);background:rgba(47,106,60,.09);color:var(--tint);border:1px solid rgba(47,106,60,.22);vertical-align:middle;}
@@ -578,6 +580,7 @@
   .statusChip.activo{background:var(--okBg);color:var(--okInk);}
   .statusChip.activo::before{background:var(--okLine);}
   .statusChip.devuelto{background:#ECECF0;color:var(--label2);}
+  .statusChip.pendiente_cobro{background:#FEF3C7;color:#92400E;}
 
   /* ============ Tabla y Filtros ============ */
   .tableControlsWrap{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:14px;}
@@ -605,6 +608,8 @@
   .estado.activo::before{background:var(--okLine);}
   .estado.devuelto{color:var(--label2);}
   .estado.devuelto::before{background:var(--control);}
+  .estado.pendiente_cobro{color:#B45309;}
+  .estado.pendiente_cobro::before{background:#F59E0B;}
 
   /* ============ Hojas modales ============ */
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.32);display:flex;align-items:center;justify-content:center;
