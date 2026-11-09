@@ -2643,7 +2643,7 @@
     var n = norm(q);
     if(!n) return null;
     var match = tools.filter(function(t){ return t.idArticulo && norm(t.idArticulo)===n; });
-    return match.length===1 ? match[0] : null;
+    return match.length >= 1 ? match[0] : null;
   }
 
   function deleteTool(id){
