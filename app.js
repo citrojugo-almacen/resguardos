@@ -1429,7 +1429,11 @@
       list = list.filter(function(r){ return r.estado === fEstado; });
     }
     if(fCond !== "todas"){
-      list = list.filter(function(r){ return r.condicion === fCond; });
+      if(fCond === "sin_condicion"){
+        list = list.filter(function(r){ return !r.condicion; });
+      } else {
+        list = list.filter(function(r){ return r.condicion === fCond; });
+      }
     }
     if(fAudit !== "todas"){
       if(fAudit === "sin_auditar"){
@@ -1480,6 +1484,7 @@
             '<option value="nuevo"'+(fCond==="nuevo"?' selected':'')+'>Nuevo</option>' +
             '<option value="usado_bueno"'+(fCond==="usado_bueno"?' selected':'')+'>Usado bueno</option>' +
             '<option value="usado_malo"'+(fCond==="usado_malo"?' selected':'')+'>Usado malo</option>' +
+            '<option value="sin_condicion"'+(fCond==="sin_condicion"?' selected':'')+'>Sin registro (por auditar)</option>' +
           '</select>' +
         '</div>' +
         '<div class="filterGroup">' +
