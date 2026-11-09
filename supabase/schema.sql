@@ -1047,6 +1047,63 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
+-- ---------- Migrar resguardos de un Área a un Responsable único ----------
+create or replace function public.migrar_resguardos_area(
+  p_numero_area text,
+  p_numero_destino text
+) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare
+  v_area_id uuid;
+  v_dest_id uuid;
+  v_count int;
+  v_nombre_area text;
+  v_nombre_dest text;
+begin
+  perform app.exigir(array['admin', 'supervisor']);
+  
+  select id, nombre into v_area_id, v_nombre_area from public.colaboradores where numero_empleado = p_numero_area and activo;
+  if v_area_id is null then
+    raise exception 'No se encontró el área de origen activa: %', p_numero_area;
+  end if;
+
+  select id, nombre into v_dest_id, v_nombre_dest from public.colaboradores where numero_empleado = p_numero_destino and activo;
+  if v_dest_id is null then
+    raise exception 'No se encontró el colaborador destino activo: %', p_numero_destino;
+  end if;
+
+  update public.resguardos
+     set colaborador_id = v_dest_id,
+         actualizado_en = now(),
+         notas = case when notas = '' then 'Migrado de ' || v_nombre_area else notas || ' | Migrado de ' || v_nombre_area end
+   where colaborador_id = v_area_id and estado = 'activo';
+  
+  get diagnostics v_count = row_count;
+
+  insert into public.bitacora (usuario, accion, entidad, entidad_id, detalle)
+  values (
+    app.nombre_actual(),
+    'migracion_area_a_responsable',
+    'resguardos',
+    v_dest_id,
+    jsonb_build_object(
+      'area_origen', v_nombre_area,
+      'codigo_area', p_numero_area,
+      'responsable_destino', v_nombre_dest,
+      'codigo_destino', p_numero_destino,
+      'resguardos_migrados', v_count
+    )
+  );
+
+  return jsonb_build_object(
+    'ok', true,
+    'area', v_nombre_area,
+    'destino', v_nombre_dest,
+    'resguardos_migrados', v_count
+  );
+end;
+$$;
+
 -- ---------- Corregir fecha de entrega ----------
 create or replace function public.editar_fecha_prestamo(p_resguardo_id uuid, p_fecha date)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
@@ -2528,6 +2585,7 @@ grant execute on function
   public.alta_colaborador(text, text, text, text),
   public.baja_colaborador(uuid),
   public.cambiar_nip(uuid, text),
+  public.migrar_resguardos_area(text, text),
   public.editar_fecha_prestamo(uuid, date),
   public.agregar_herramienta(text, text, numeric),
   public.actualizar_costo_herramienta(uuid, numeric),
