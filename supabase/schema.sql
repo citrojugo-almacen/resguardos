@@ -2495,6 +2495,45 @@ begin
   );
 end $$;
 
+-- 12.1) (Almacén - Admin/Supervisor) Consultar bitácora forense e historial de movimientos auditados
+create or replace function public.consultar_bitacora(
+  p_limite int default 150,
+  p_buscar text default null,
+  p_accion text default null
+) returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_res jsonb;
+begin
+  perform app.exigir(array['admin', 'supervisor', 'almacen']);
+  
+  select coalesce(jsonb_agg(
+    jsonb_build_object(
+      'id', b.id,
+      'ts', b.ts,
+      'usuario', b.usuario,
+      'accion', b.accion,
+      'entidad', b.entidad,
+      'entidad_id', b.entidad_id,
+      'detalle', b.detalle
+    ) order by b.ts desc
+  ), '[]'::jsonb)
+  into v_res
+  from (
+    select id, ts, usuario, accion, entidad, entidad_id, detalle
+    from public.bitacora
+    where (p_accion is null or p_accion = '' or p_accion = 'todas' or accion = p_accion)
+      and (p_buscar is null or p_buscar = '' or 
+           usuario ilike '%' || p_buscar || '%' or 
+           accion ilike '%' || p_buscar || '%' or 
+           entidad ilike '%' || p_buscar || '%' or
+           detalle::text ilike '%' || p_buscar || '%')
+    order by ts desc
+    limit coalesce(p_limite, 150)
+  ) b;
+  
+  return jsonb_build_object('ok', true, 'filas', v_res);
+end $$;
+
 -- 13) (Almacén - Admin) Listar líderes, facultades y solicitudes pendientes de liderazgo
 create or replace function public.admin_listar_lideres()
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
@@ -2639,7 +2678,7 @@ create policy constancias_leer on public.constancias for select to authenticated
 
 drop policy if exists bitacora_leer on public.bitacora;
 create policy bitacora_leer on public.bitacora for select to authenticated
-  using ((select app.es_admin()));
+  using (app.rol_actual() in ('admin', 'supervisor', 'almacen'));
 
 -- =====================================================================
 -- PERMISOS (GRANT/REVOKE). Supabase concede por defecto todo a anon y
@@ -2697,6 +2736,7 @@ grant execute on function
   public.agregar_herramienta(text, text, numeric),
   public.actualizar_costo_herramienta(uuid, numeric),
   public.obtener_costos_almacen(),
+  public.consultar_bitacora(int, text, text),
   public.eliminar_herramienta(uuid),
   public.admin_actualizar_usuario(uuid, text, boolean),
   public.admin_listar_lideres(),

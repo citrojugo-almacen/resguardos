@@ -39,10 +39,17 @@
     pinFlow: null,
     toast: null,
     pageSize: 40,
-    visible: { activos: 40, historial: 40, catalogo: 40, empleados: 40, tabla: 40, constancias: 40, cobros: 40 },
+    visible: { activos: 40, historial: 40, catalogo: 40, empleados: 40, tabla: 40, constancias: 40, cobros: 40, bitacora: 40 },
     justStamped: [],
     revFlow: null, audOpen: {}, print: null, cnQuery: "", cnEmpId: "", cobrosQuery: "",
-    biometricAvailable: false, biometricDevice: "", enrolarFlow: null
+    biometricAvailable: false, biometricDevice: "", enrolarFlow: null,
+    bitacora: [],
+    bitacoraLoaded: false,
+    bitacoraLoading: false,
+    bitacoraError: "",
+    bitacoraQuery: "",
+    bitacoraFiltroAccion: "todas",
+    bitacoraLimite: 100
   };
 
   function paginate(list, key){
@@ -68,6 +75,13 @@
     if(!iso) return "—";
     var d = new Date(iso+"T00:00:00");
     return d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"2-digit"});
+  }
+  function fmtDateTime(iso){
+    if(!iso) return "—";
+    var d = new Date(iso);
+    if(isNaN(d.getTime())) return String(iso).slice(0,19);
+    return d.toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"}) + " " +
+           d.toLocaleTimeString("es-MX",{hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
   }
   function diasDesde(iso){
     if(!iso) return "—";
@@ -555,6 +569,8 @@
       nav_auditoria: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v3H9z"/><polyline points="9 13 11 15 15 11"/></svg>',
       nav_constancias: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/></svg>',
       nav_cobros: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v12"/><path d="M15 9.5a2.5 2.5 0 0 0-5 0c0 3 5 2 5 5a2.5 2.5 0 0 1-5 0"/></svg>',
+      nav_bitacora: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>',
+      reload: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>',
       fingerprint: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M9 6.8a6 6 0 0 1 9 5.2c0 .47 0 1.17-.02 2"/><path d="M4 10.95C4 4.5 9 2 12 2s8 2.5 8 8.95"/><path d="M6 14c.08-1.57.5-3.88 1.5-5.5"/><path d="M12 22a10.6 10.6 0 0 0 6-3"/></svg>',
       sun: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
       moon: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
@@ -919,6 +935,9 @@
       {id:"constancias", label:"Constancias", badge: constancias.length},
       {id:"cobros", label:"Pendientes de cobro", badge: getPendientesCobro().length}
     ];
+    if(ui.currentUser && (ui.currentUser.rol === "admin" || ui.currentUser.rol === "supervisor")){
+      tabs.push({id:"bitacora", label:"Bitácora de auditoría"});
+    }
     if(ui.currentUser && ui.currentUser.rol === "admin"){
       tabs.push({id:"usuarios", label:"Usuarios", badge:users.length});
     }
@@ -2173,10 +2192,185 @@
     return html;
   }
 
+  // ---------- Bitácora de Auditoría Forense ----------
+  var ACCION_INFO = {
+    portal_login: { label: "Inicio de sesión", cls: "chip-ok" },
+    portal_login_fallido: { label: "Login fallido", cls: "chip-danger" },
+    portal_activado: { label: "Portal activado", cls: "chip-info" },
+    portal_nip_creado: { label: "NIP establecido", cls: "chip-info" },
+    portal_primer_ingreso: { label: "Primer ingreso", cls: "chip-info" },
+    portal_nombre_incorrecto: { label: "Nombre no coincide", cls: "chip-warn" },
+    portal_logout: { label: "Cierre de sesión", cls: "chip-muted" },
+    portal_password_cambiado: { label: "Contraseña cambiada", cls: "chip-info" },
+    colab_liderazgo_solicitado: { label: "Liderazgo solicitado", cls: "chip-purple" },
+    colab_subordinado_solicitado: { label: "Personal solicitado", cls: "chip-purple" },
+    colab_lider_removido: { label: "Personal removido", cls: "chip-warn" },
+    crear_resguardo: { label: "Nuevo préstamo", cls: "chip-ok" },
+    devolver_resguardo: { label: "Devolución", cls: "chip-muted" },
+    transferir_resguardo: { label: "Transferencia", cls: "chip-warn" },
+    alta_colaborador: { label: "Alta colaborador", cls: "chip-ok" },
+    colaborador_baja: { label: "Baja colaborador", cls: "chip-danger" },
+    adeudo_saldado: { label: "Adeudo saldado", cls: "chip-ok" },
+    constancia_emitida: { label: "Constancia emitida", cls: "chip-ok" },
+    registrar_revision: { label: "Revisión física", cls: "chip-purple" },
+    auditoria_revision: { label: "Auditoría en campo", cls: "chip-purple" },
+    registrar_huella: { label: "Huella registrada", cls: "chip-purple" },
+    eliminar_huella: { label: "Huella eliminada", cls: "chip-warn" },
+    herramienta_alta: { label: "Alta herramienta", cls: "chip-ok" },
+    herramienta_baja: { label: "Baja herramienta", cls: "chip-warn" },
+    herramienta_costo_actualizado: { label: "Costo actualizado", cls: "chip-info" },
+    costos_ax_actualizados: { label: "Costos AX sincronizados", cls: "chip-info" },
+    resguardos_importados: { label: "Lote importado", cls: "chip-info" },
+    nip_cambiado: { label: "NIP restablecido", cls: "chip-info" }
+  };
+
+  function cargarBitacora(force){
+    if(ui.bitacoraLoading) return;
+    if(ui.bitacoraLoaded && !force) return;
+    ui.bitacoraLoading = true;
+    ui.bitacoraError = "";
+    render();
+    rpc("consultar_bitacora", {
+      p_limite: ui.bitacoraLimite || 100,
+      p_buscar: ui.bitacoraQuery ? ui.bitacoraQuery.trim() : null,
+      p_accion: (ui.bitacoraFiltroAccion && ui.bitacoraFiltroAccion !== "todas") ? ui.bitacoraFiltroAccion : null
+    }).then(function(res){
+      ui.bitacoraLoading = false;
+      if(res && res.ok && Array.isArray(res.filas)){
+        ui.bitacora = res.filas;
+        ui.bitacoraLoaded = true;
+      } else {
+        ui.bitacoraError = (res && res.error) || "No se pudo consultar la bitácora.";
+      }
+      render();
+    }).catch(function(err){
+      ui.bitacoraLoading = false;
+      ui.bitacoraError = err.message || "Error al cargar la bitácora.";
+      render();
+    });
+  }
+
+  function bitacoraTpl(){
+    if(!ui.currentUser || (ui.currentUser.rol !== "admin" && ui.currentUser.rol !== "supervisor")){
+      return '<div class="empty">Solo un supervisor o administrador puede consultar la bitácora de auditoría.</div>';
+    }
+
+    var html = '<div class="tableControlsWrap">' +
+      '<div class="searchWrap" style="flex:1;min-width:260px;max-width:480px;"><span class="searchIcon">'+icon("search")+'</span>' +
+      '<input type="text" id="input-bitacora-query" placeholder="Buscar por usuario, nómina, colaborador, herramienta o IP…" value="'+esc(ui.bitacoraQuery)+'"/></div>' +
+      '<div class="tableFilterBar">' +
+        '<div class="filterGroup">' +
+          '<label for="f-bita-accion">Acción:</label>' +
+          '<select id="f-bita-accion" data-action="bitacora-filtro-accion" class="filterSelect">' +
+            '<option value="todas"'+(ui.bitacoraFiltroAccion==="todas"?' selected':'')+'>Todas las acciones</option>' +
+            '<option value="portal_login"'+(ui.bitacoraFiltroAccion==="portal_login"?' selected':'')+'>Inicios de sesión (Portal)</option>' +
+            '<option value="portal_login_fallido"'+(ui.bitacoraFiltroAccion==="portal_login_fallido"?' selected':'')+'>Logins fallidos</option>' +
+            '<option value="portal_activado"'+(ui.bitacoraFiltroAccion==="portal_activado"?' selected':'')+'>Portal activado</option>' +
+            '<option value="portal_nip_creado"'+(ui.bitacoraFiltroAccion==="portal_nip_creado"?' selected':'')+'>NIP establecido</option>' +
+            '<option value="crear_resguardo"'+(ui.bitacoraFiltroAccion==="crear_resguardo"?' selected':'')+'>Nuevos préstamos</option>' +
+            '<option value="devolver_resguardo"'+(ui.bitacoraFiltroAccion==="devolver_resguardo"?' selected':'')+'>Devoluciones</option>' +
+            '<option value="transferir_resguardo"'+(ui.bitacoraFiltroAccion==="transferir_resguardo"?' selected':'')+'>Transferencias</option>' +
+            '<option value="auditoria_revision"'+(ui.bitacoraFiltroAccion==="auditoria_revision"?' selected':'')+'>Auditoría en campo</option>' +
+            '<option value="constancia_emitida"'+(ui.bitacoraFiltroAccion==="constancia_emitida"?' selected':'')+'>Constancias emitidas</option>' +
+            '<option value="colaborador_baja"'+(ui.bitacoraFiltroAccion==="colaborador_baja"?' selected':'')+'>Bajas colaborador</option>' +
+            '<option value="adeudo_saldado"'+(ui.bitacoraFiltroAccion==="adeudo_saldado"?' selected':'')+'>Adeudos saldados</option>' +
+            '<option value="registrar_huella"'+(ui.bitacoraFiltroAccion==="registrar_huella"?' selected':'')+'>Huellas registradas</option>' +
+          '</select>' +
+        '</div>' +
+        '<div class="filterGroup">' +
+          '<label for="f-bita-limite">Límite:</label>' +
+          '<select id="f-bita-limite" data-action="bitacora-limite" class="filterSelect">' +
+            '<option value="50"'+(ui.bitacoraLimite===50?' selected':'')+'>50 eventos</option>' +
+            '<option value="100"'+(ui.bitacoraLimite===100?' selected':'')+'>100 eventos</option>' +
+            '<option value="250"'+(ui.bitacoraLimite===250?' selected':'')+'>250 eventos</option>' +
+            '<option value="500"'+(ui.bitacoraLimite===500?' selected':'')+'>500 eventos</option>' +
+          '</select>' +
+        '</div>' +
+        '<button type="button" class="btnOutline" data-action="bitacora-reload" title="Recargar bitácora">'+icon("reload")+' Actualizar</button>' +
+        ((ui.bitacoraQuery || (ui.bitacoraFiltroAccion && ui.bitacoraFiltroAccion !== "todas")) ?
+          '<button type="button" class="btnFilterReset" data-action="bitacora-limpiar-filtros">'+icon("x")+' Limpiar</button>' : '') +
+      '</div></div>';
+
+    if(ui.bitacoraLoading){
+      return html + '<div class="empty">'+icon("audit")+' Consultando bitácora inmutable en Supabase…</div>';
+    }
+    if(ui.bitacoraError){
+      return html + '<div class="empty errorText">'+icon("alert")+' '+esc(ui.bitacoraError)+'<br/><button class="link" data-action="bitacora-reload">Reintentar</button></div>';
+    }
+
+    var list = ui.bitacora || [];
+    var q = (ui.bitacoraQuery || "").trim().toLowerCase();
+    if(q){
+      list = list.filter(function(r){
+        var u = (r.usuario || "").toLowerCase();
+        var a = (r.accion || "").toLowerCase();
+        var e = (r.entidad || "").toLowerCase();
+        var d = JSON.stringify(r.detalle || {}).toLowerCase();
+        return u.indexOf(q) >= 0 || a.indexOf(q) >= 0 || e.indexOf(q) >= 0 || d.indexOf(q) >= 0;
+      });
+    }
+
+    var totalLogins = list.filter(function(r){ return r.accion === "portal_login" || r.accion === "portal_login_fallido"; }).length;
+    var totalOperaciones = list.filter(function(r){ return r.accion === "crear_resguardo" || r.accion === "devolver_resguardo" || r.accion === "transferir_resguardo" || r.accion === "auditoria_revision" || r.accion === "constancia_emitida"; }).length;
+
+    html += '<div class="metricGrid" style="margin-bottom:18px;">' +
+      '<div class="metric m-lime"><div class="metricLabel">Eventos consultados</div><div class="metricValue">'+list.length.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-teal"><div class="metricLabel">Accesos al portal</div><div class="metricValue">'+totalLogins.toLocaleString("es-MX")+'</div></div>' +
+      '<div class="metric m-plum"><div class="metricLabel">Operaciones en campo</div><div class="metricValue">'+totalOperaciones.toLocaleString("es-MX")+'</div></div>' +
+    '</div>';
+
+    if(!list.length){
+      return html + '<div class="empty">No hay eventos en la bitácora que coincidan con los filtros seleccionados.</div>';
+    }
+
+    var page = paginate(list, "bitacora");
+
+    html += '<div class="tableScroll"><table><thead><tr>' +
+      '<th style="width:160px;">Fecha y hora</th>' +
+      '<th>Usuario / Dispositivo</th>' +
+      '<th>Acción</th>' +
+      '<th>Entidad</th>' +
+      '<th>Detalles</th>' +
+    '</tr></thead><tbody>';
+
+    page.shown.forEach(function(r){
+      var info = ACCION_INFO[r.accion] || { label: r.accion, cls: "chip-muted" };
+      var det = r.detalle || {};
+      var detParts = [];
+      if(det.colaborador) detParts.push('<b>Colab:</b> ' + esc(det.colaborador));
+      if(det.ip) detParts.push('<span class="dim">IP: ' + esc(det.ip) + '</span>');
+      if(det.folio) detParts.push('<b>Folio:</b> ' + esc(det.folio));
+      if(det.herramienta) detParts.push('<b>Herramienta:</b> ' + esc(det.herramienta));
+      if(det.motivo) detParts.push('<b>Motivo:</b> ' + esc(det.motivo));
+      if(det.resultado) detParts.push('<b>Resultado:</b> ' + esc(det.resultado));
+      if(det.total_adeudo != null) detParts.push('<b>Adeudo:</b> $' + Number(det.total_adeudo).toFixed(2));
+      if(det.intentos) detParts.push('<b>Intentos fallidos:</b> ' + esc(det.intentos));
+      if(!detParts.length){
+        var str = JSON.stringify(det);
+        if(str !== "{}") detParts.push('<span class="code" style="font-size:11.5px;">' + esc(str.length > 90 ? str.slice(0,87)+'...' : str) + '</span>');
+      }
+
+      html += '<tr>' +
+        '<td style="font-size:12.5px;color:var(--label2);white-space:nowrap;">' + fmtDateTime(r.ts) + '</td>' +
+        '<td><b>' + esc(r.usuario || "Sistema") + '</b></td>' +
+        '<td><span class="statusChip ' + info.cls + '">' + esc(info.label) + '</span></td>' +
+        '<td><span class="code" style="font-size:12px;">' + esc(r.entidad || "—") + '</span></td>' +
+        '<td style="white-space:normal;max-width:440px;line-height:1.4;font-size:12.5px;">' + (detParts.join(" · ") || '<span class="dim">—</span>') + '</td>' +
+      '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    html += '<p class="hint center" style="margin-top:10px;">Mostrando ' + page.shown.length + ' de ' + page.total + ' eventos auditados</p>';
+    if(page.hasMore) html += loadMoreBtn("bitacora", (page.total - page.shown.length) + ' restantes');
+
+    return html;
+  }
+
   var tabRenderers = {
     dashboard: dashboardTpl, activos: activosTpl, nuevo: nuevoTpl,
     catalogo: catalogoTpl, empleados: empleadosTpl, historial: historialTpl, tabla: tablaTpl,
-    usuarios: usersTpl, auditoria: auditoriaTpl, constancias: constanciasTpl, cobros: cobrosTpl
+    usuarios: usersTpl, auditoria: auditoriaTpl, constancias: constanciasTpl, cobros: cobrosTpl,
+    bitacora: bitacoraTpl
   };
 
   function render(){
@@ -2253,7 +2447,10 @@
   // ---------- Actions ----------
   function setTab(id){
     ui.tab = id; ui.confirmDeleteEmpId=null; ui.confirmDeleteToolId=null; ui.confirmReturnId=null;
-    ui.visible = { activos: ui.pageSize, historial: ui.pageSize, catalogo: ui.pageSize, empleados: ui.pageSize, tabla: ui.pageSize };
+    ui.visible = { activos: ui.pageSize, historial: ui.pageSize, catalogo: ui.pageSize, empleados: ui.pageSize, tabla: ui.pageSize, constancias: ui.pageSize, cobros: ui.pageSize, bitacora: ui.pageSize };
+    if(id === "bitacora" && !ui.bitacoraLoaded){
+      cargarBitacora();
+    }
     render();
   }
 
@@ -2964,6 +3161,15 @@
           ui.visible.tabla = ui.pageSize;
           render();
           break;
+        case "bitacora-reload":
+          cargarBitacora(true);
+          break;
+        case "bitacora-limpiar-filtros":
+          ui.bitacoraQuery = "";
+          ui.bitacoraFiltroAccion = "todas";
+          ui.visible.bitacora = ui.pageSize;
+          cargarBitacora(true);
+          break;
         case "open-new-employee":
           ui.empForm = {numero:"",nombre:"",pin:"",pin2:""}; ui.empFormError="";
           ui.showNewEmployeeModal = true; render(); break;
@@ -3191,6 +3397,7 @@
       case "input-search-catalog": ui.catQuery = v; ui.visible.catalogo = ui.pageSize; render(); break;
       case "input-search-employees": ui.empListQuery = v; ui.visible.empleados = ui.pageSize; render(); break;
       case "input-cobros-query": ui.cobrosQuery = v; ui.visible.cobros = ui.pageSize; render(); break;
+      case "input-bitacora-query": ui.bitacoraQuery = v; ui.visible.bitacora = ui.pageSize; render(); break;
       case "input-cat-nombre": ui.catForm.nombre = v; break;
       case "input-cat-idarticulo": ui.catForm.idArticulo = v; break;
       case "input-cat-costo": ui.catForm.costo = v; break;
@@ -3236,6 +3443,18 @@
       else if(fa === "table-filtro-area") ui.tableFiltroArea = t.value;
       ui.visible.tabla = ui.pageSize;
       render();
+      return;
+    }
+    if(t.dataset && t.dataset.action === "bitacora-filtro-accion"){
+      ui.bitacoraFiltroAccion = t.value;
+      ui.visible.bitacora = ui.pageSize;
+      cargarBitacora(true);
+      return;
+    }
+    if(t.dataset && t.dataset.action === "bitacora-limite"){
+      ui.bitacoraLimite = parseInt(t.value, 10) || 100;
+      ui.visible.bitacora = ui.pageSize;
+      cargarBitacora(true);
       return;
     }
   });

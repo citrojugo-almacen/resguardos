@@ -581,6 +581,22 @@
   .statusChip.activo::before{background:var(--okLine);}
   .statusChip.devuelto{background:#ECECF0;color:var(--label2);}
   .statusChip.pendiente_cobro{background:#FEF3C7;color:#92400E;}
+  .statusChip.chip-ok{background:var(--okBg);color:var(--okInk);}
+  .statusChip.chip-ok::before{background:var(--okLine);}
+  .statusChip.chip-danger{background:var(--dangerBg);color:var(--danger);}
+  .statusChip.chip-danger::before{background:var(--danger);}
+  .statusChip.chip-warn{background:#FEF3C7;color:#92400E;}
+  .statusChip.chip-warn::before{background:#F59E0B;}
+  .statusChip.chip-info{background:#E0F2FE;color:#0369A1;}
+  .statusChip.chip-info::before{background:#0EA5E9;}
+  .statusChip.chip-purple{background:#F3E8FF;color:#6B21A8;}
+  .statusChip.chip-purple::before{background:#A855F7;}
+  .statusChip.chip-muted{background:#ECECF0;color:var(--label2);}
+  .statusChip.chip-muted::before{background:var(--hint);}
+  [data-theme="dark"] .statusChip.chip-warn{background:rgba(245,158,11,.18);color:#FCD34D;}
+  [data-theme="dark"] .statusChip.chip-info{background:rgba(14,165,233,.18);color:#7DD3FC;}
+  [data-theme="dark"] .statusChip.chip-purple{background:rgba(168,85,247,.18);color:#D8B4FE;}
+  [data-theme="dark"] .statusChip.chip-muted{background:rgba(255,255,255,.08);color:var(--label2);}
 
   /* ============ Tabla y Filtros ============ */
   .tableControlsWrap{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:14px;}
