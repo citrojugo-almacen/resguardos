@@ -932,8 +932,6 @@
     var rowsData = items.map(function(r, idx){
       var desc = r.herramienta || "";
       var obs = "Entregado: " + fmtDMY(r.fechaPrestamo);
-      if(r.condicion && CONDICION[r.condicion]) obs += " · " + CONDICION[r.condicion];
-      if(r.notas) obs += " · " + r.notas;
       return { no: String(idx + 1), qty: String(r.cantidad || 1), desc: desc, obs: obs };
     });
     rowsData.push({ isEnd: true, text: items.length ? "*** FIN DEL LISTADO ***" : "*** SIN RESGUARDOS ACTIVOS ***" });
@@ -984,7 +982,7 @@
           '<tr><td><span class="resMetaLbl">DEPARTAMENTO:</span> '+esc(e.area||e.puesto||"")+'</td></tr>' +
         '</tbody></table>' +
         '<table class="resMainTable"><thead><tr>' +
-          '<th style="width:28px;">No.</th><th style="width:62px;">CANTIDAD</th><th>DESCRIPCION</th><th style="width:196px;">OBSERVACIONES.</th>' +
+          '<th style="width:30px;">No.</th><th style="width:66px;">CANTIDAD</th><th>DESCRIPCION</th><th style="width:146px;">OBSERVACIONES.</th>' +
         '</tr></thead><tbody>'+bodyHtml+'</tbody></table>' +
         '<div class="resPageNum">Hoja '+(pIdx+1)+' de '+totalPages+'</div>' +
         '<table class="resDebtTable"><thead>' +
