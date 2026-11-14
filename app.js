@@ -373,6 +373,13 @@
     return norm(emp.nombre).indexOf(n) >= 0 || (!!u && !!emp.numero && emp.numero.indexOf(u) >= 0);
   }
   function mapTool(t){ return { id: String(t.id), nombre: String(t.nombre || ""), idArticulo: String(t.id_articulo || ""), costo: puedeVerCostos() ? (parseFloat(t.costo) || 0) : 0 }; }
+  var TOOL_BLOCKED_RE = /\b(NO\s+USAR|NO\s+UTILIZAR|NO\s+SIRVE|BLOQUEADO|DESCONTINUADO|OBSOLETO|NO\s+VIGENTE|PASA\s+AL)\b|\bBLOQUEADO\s+SUST\b/i;
+  function isToolVisible(t){
+    if(!t) return false;
+    var cod = String(t.idArticulo || "").trim().toUpperCase();
+    if(cod.indexOf("SHYE") === 0) return false;
+    return !TOOL_BLOCKED_RE.test(String(t.nombre || ""));
+  }
   function mapResguardo(r){
     return {
       id: String(r.id), grupoId: r.grupo_id ? String(r.grupo_id) : "", employeeId: String(r.colaborador_id),
@@ -436,7 +443,7 @@
       employees = all.filter(function(e){ return e.activo; });
       formerEmployees = {};
       all.forEach(function(e){ if(!e.activo) formerEmployees[e.id] = e; });
-      tools = res[1].filter(okId).map(mapTool);
+      tools = res[1].filter(okId).map(mapTool).filter(isToolVisible);
       resguardos = res[2].filter(function(r){ return okId(r) && UUID_RE.test(String(r.colaborador_id)); }).map(mapResguardo);
       if(res[3]) users = res[3].filter(okId).map(mapUser);
       if(Array.isArray(res[5])) constancias = res[5].filter(okId).map(mapConstancia);
