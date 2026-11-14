@@ -1473,7 +1473,7 @@
     if(employees.length===0){ html += '<p class="empty">Aún no hay colaboradores registrados.</p>'; }
     var full = sortByNombre(employees.filter(function(e){ return !ui.empListQuery.trim() || empMatches(e, ui.empListQuery); }));
     var page = paginate(full, "empleados");
-    html += '<div class="cardGrid listGroup">';
+    html += '<div class="cardGrid listGroup empListGroup">';
     page.shown.forEach(function(emp){
       var activosEmp = resguardos.filter(function(r){return r.employeeId===emp.id && r.estado==="activo";}).length;
       var costoEmp = verCostos ? empCostoTotal(emp.id) : 0;
@@ -1495,7 +1495,7 @@
         }
 
         html += '<div class="empCard"><div class="avatar avatarLg '+avatarColorClass(emp.nombre)+'">'+esc(initials(emp.nombre))+'</div>' +
-          '<div style="min-width:0;flex:1;"><div class="name">'+esc(emp.nombre)+'</div>' +
+          '<div class="empInfo"><div class="name">'+esc(emp.nombre)+'</div>' +
             '<div class="area">'+(emp.numero ? '<span class="code">#'+esc(emp.numero)+'</span>' : 'Sin número de empleado')+(emp.area ? ' · '+esc(emp.area) : '')+'</div>' +
             (emp.nipPendiente ? '<div class="area">NIP pendiente · lo crea en su portal o asígnalo con el botón NIP</div>' : '') +
             portalLine(emp) +
@@ -1504,6 +1504,7 @@
               lvlBadge +
               (emp.huellaRegistrada ? '<span class="badgeBio">'+icon("fingerprint")+' Huella activa</span>' : '<span class="badgeBio none">'+icon("fingerprint")+' Sin huella</span>') +
             '</div></div>' +
+          '<div class="empActions">' +
           '<button type="button" class="link" data-action="open-enrolar-huella" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Registrar o actualizar huella dactilar en ventanilla">Huella</button>' +
           (ui.currentUser && ui.currentUser.rol === "admin" ? '<button type="button" class="link" data-action="admin-editar-lider" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Configurar facultades de líder y auditoría">Líder</button>' : '') +
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
@@ -1517,6 +1518,7 @@
             (verCostos ? '<span class="badgeZeroCost">$0.00 MXN</span>' : '') +
             '<button type="button" class="link" data-action="cn-goto" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Constancia de no adeudo">Constancia</button>') +
           '<button class="deleteBtn" data-action="request-delete-employee" data-id="'+emp.id+'" title="Eliminar colaborador" aria-label="Eliminar colaborador">'+icon("trash")+'</button>' +
+          '</div>' +
         '</div>';
       }
     });
