@@ -982,7 +982,7 @@
           '<tr><td><span class="resMetaLbl">DEPARTAMENTO:</span> '+esc(e.area||e.puesto||"")+'</td></tr>' +
         '</tbody></table>' +
         '<table class="resMainTable"><thead><tr>' +
-          '<th style="width:30px;">No.</th><th style="width:66px;">CANTIDAD</th><th>DESCRIPCION</th><th style="width:146px;">OBSERVACIONES.</th>' +
+          '<th style="width:32px;">No.</th><th style="width:76px;">CANTIDAD</th><th>DESCRIPCION</th><th style="width:146px;">OBSERVACIONES.</th>' +
         '</tr></thead><tbody>'+bodyHtml+'</tbody></table>' +
         '<div class="resPageNum">Hoja '+(pIdx+1)+' de '+totalPages+'</div>' +
         '<table class="resDebtTable"><thead>' +
