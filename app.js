@@ -76,6 +76,14 @@
     var d = new Date(iso+"T00:00:00");
     return d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"2-digit"});
   }
+  function fmtDMY(val){
+    if(!val) return "—";
+    var d = (val instanceof Date) ? val : new Date(String(val).slice(0, 10) + "T00:00:00");
+    if(isNaN(d.getTime())) return String(val);
+    var dd = String(d.getDate()); if(dd.length < 2) dd = "0" + dd;
+    var mm = String(d.getMonth() + 1); if(mm.length < 2) mm = "0" + mm;
+    return dd + "/" + mm + "/" + d.getFullYear();
+  }
   function fmtDateTime(iso){
     if(!iso) return "—";
     var d = new Date(iso);
@@ -909,11 +917,95 @@
       '<footer class="shFoot">Folio '+folioTxt(c.folio, "adeudo")+' · Código de verificación '+esc(c.codigo)+'. Documento emitido desde el Sistema de Resguardos de Citrojugo Almacén. Válido con firmas autógrafas.</footer>' +
     '</article>';
   }
+  function resguardoTrabajadorSheet(empId){
+    var e = empName(empId);
+    if(!e) return "";
+    var items = resguardos.filter(function(r){ return r.employeeId === e.id && r.estado === "activo"; }).slice().sort(function(a, b){
+      var fa = a.fechaPrestamo || "", fb = b.fechaPrestamo || "";
+      if(fa !== fb) return fa < fb ? -1 : 1;
+      var ca = a.creadoEn || "", cb = b.creadoEn || "";
+      if(ca !== cb) return ca < cb ? -1 : 1;
+      return (a.herramienta || "").localeCompare(b.herramienta || "", "es");
+    });
+    var adeudos = resguardos.filter(function(r){ return r.employeeId === e.id && r.estado === "pendiente_cobro"; });
+    var hoy = fmtDMY(new Date());
+    var rowsData = items.map(function(r, idx){
+      var desc = r.herramienta || "";
+      var obs = "Entregado: " + fmtDMY(r.fechaPrestamo);
+      if(r.condicion && CONDICION[r.condicion]) obs += " · " + CONDICION[r.condicion];
+      if(r.notas) obs += " · " + r.notas;
+      return { no: String(idx + 1), qty: String(r.cantidad || 1), desc: desc, obs: obs };
+    });
+    rowsData.push({ isEnd: true, text: items.length ? "*** FIN DEL LISTADO ***" : "*** SIN RESGUARDOS ACTIVOS ***" });
+
+    var ROWS_PER_PAGE = 26;
+    var pages = [];
+    for(var i = 0; i < rowsData.length; i += ROWS_PER_PAGE){
+      pages.push(rowsData.slice(i, i + ROWS_PER_PAGE));
+    }
+    var totalPages = pages.length;
+
+    var debtRows = "";
+    for(var dIdx = 0; dIdx < 5; dIdx++){
+      var ad = adeudos[dIdx];
+      if(ad){
+        debtRows += '<tr><td style="text-align:center;">'+esc(String(ad.cantidad || 1))+'</td><td>'+esc(ad.herramienta || "")+'</td></tr>';
+      } else {
+        debtRows += '<tr><td>&nbsp;</td><td>&nbsp;</td></tr>';
+      }
+    }
+
+    return pages.map(function(pageRows, pIdx){
+      var bodyHtml = "";
+      for(var rIdx = 0; rIdx < ROWS_PER_PAGE; rIdx++){
+        var row = pageRows[rIdx];
+        if(!row){
+          bodyHtml += '<tr><td class="cNo">&nbsp;</td><td class="cQty">&nbsp;</td><td class="cDesc">&nbsp;</td><td class="cObs">&nbsp;</td></tr>';
+        } else if(row.isEnd){
+          bodyHtml += '<tr><td class="cNo">&nbsp;</td><td class="cQty">&nbsp;</td><td class="cDesc cEnd">'+esc(row.text)+'</td><td class="cObs">&nbsp;</td></tr>';
+        } else {
+          bodyHtml += '<tr><td class="cNo">'+esc(row.no)+'</td><td class="cQty">'+esc(row.qty)+'</td><td class="cDesc">'+esc(row.desc)+'</td><td class="cObs">'+esc(row.obs)+'</td></tr>';
+        }
+      }
+      return '<article class="resSheet">' +
+        '<table class="resHdrTable"><tbody>' +
+          '<tr>' +
+            '<td class="resHdrLogo" rowspan="3"><img src="'+LOGO+'" alt="Citrojugo"/></td>' +
+            '<td class="resHdrTitle" rowspan="2">RESGUARDO DE HERRAMIENTA Y/O EQUIPO.</td>' +
+            '<td class="resHdrCtrl" style="text-align:center;">NO AUDITABLE</td>' +
+          '</tr>' +
+          '<tr><td class="resHdrCtrl">Núm. Revisión:</td></tr>' +
+          '<tr><td class="resHdrAprobo">Aprobó: Gerencia De Mantenimiento.</td><td class="resHdrCtrl">Fecha de aplicación:</td></tr>' +
+        '</tbody></table>' +
+        '<table class="resMetaTable"><tbody>' +
+          '<tr><td style="width:68%;"><span class="resMetaLbl">NOMBRE DEL TRABAJADOR:</span> '+esc(e.nombre||"")+'</td>' +
+              '<td style="width:32%;vertical-align:top;" rowspan="3"><span class="resMetaLbl">FECHA:</span> '+esc(hoy)+'</td></tr>' +
+          '<tr><td><span class="resMetaLbl">N° DE EMPLEADO:</span> '+esc(e.numero||"")+'</td></tr>' +
+          '<tr><td><span class="resMetaLbl">DEPARTAMENTO:</span> '+esc(e.area||e.puesto||"")+'</td></tr>' +
+        '</tbody></table>' +
+        '<table class="resMainTable"><thead><tr>' +
+          '<th style="width:28px;">No.</th><th style="width:62px;">CANTIDAD</th><th>DESCRIPCION</th><th style="width:196px;">OBSERVACIONES.</th>' +
+        '</tr></thead><tbody>'+bodyHtml+'</tbody></table>' +
+        '<div class="resPageNum">Hoja '+(pIdx+1)+' de '+totalPages+'</div>' +
+        '<table class="resDebtTable"><thead>' +
+          '<tr><th colspan="2">ADEUDO DE HERRAMIENTA</th></tr>' +
+          '<tr><th style="width:100px;">CANTIDAD</th><th>DESCRIPCION</th></tr>' +
+        '</thead><tbody>'+debtRows+'</tbody></table>' +
+        '<p class="resLegal">Acepto que la herramienta antes mencionada está a mi resguardo y en caso de perderse tengo que reponerla o en su momento descontarse de mi nómina.</p>' +
+        '<div class="resSignBox">' +
+          '<div><div class="resSignLine"></div><div class="resSignLabel">NOMBRE Y FIRMA<br/>TRABAJADOR</div></div>' +
+          '<div><div class="resSignLine"></div><div class="resSignLabel">NOMBRE Y FIRMA<br/>ALMACEN</div></div>' +
+        '</div>' +
+      '</article>';
+    }).join("");
+  }
   function printTpl(){
     var p = ui.print; if(!p) return "";
-    var isAdeudo = (p.tipo === "adeudo") || (p.c && p.c.tipo === "adeudo");
-    var sheet = isAdeudo ? cartaAdeudoSheet(p.c, p.copia) : (p.tipo === "constancia" ? constanciaSheet(p.c, p.copia) : checklistSheet(p.grupo));
-    var title = isAdeudo ? ('Carta de adeudo ' + folioTxt(p.c.folio, "adeudo")) : (p.tipo === "constancia" ? ('Constancia ' + folioTxt(p.c.folio)) : 'Lista de verificación');
+    var isResguardo = p.tipo === "resguardo";
+    var isAdeudo = !isResguardo && ((p.tipo === "adeudo") || (p.c && p.c.tipo === "adeudo"));
+    var sheet = isResguardo ? resguardoTrabajadorSheet(p.employeeId) : (isAdeudo ? cartaAdeudoSheet(p.c, p.copia) : (p.tipo === "constancia" ? constanciaSheet(p.c, p.copia) : checklistSheet(p.grupo)));
+    var resEmp = isResguardo ? empName(p.employeeId) : null;
+    var title = isResguardo ? ('Resguardo de herramienta' + (resEmp ? ' · ' + esc(resEmp.nombre) : '')) : (isAdeudo ? ('Carta de adeudo ' + folioTxt(p.c.folio, "adeudo")) : (p.tipo === "constancia" ? ('Constancia ' + folioTxt(p.c.folio)) : 'Lista de verificación'));
     return '<div class="printOverlay" role="dialog" aria-modal="true" aria-label="Vista de impresión">' +
       '<div class="printBar"><b>'+title+'</b><span>Tamaño carta</span>' +
         '<button type="button" class="btnPrimary" data-action="print-now">'+icon("print")+' Imprimir</button>' +
@@ -1412,6 +1504,7 @@
           '<button type="button" class="link" data-action="cambiar-nip" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Cambiar NIP o desbloquear">NIP</button>' +
           (portalEstado[emp.id] ? '<button type="button" class="link" data-action="reset-portal" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;" title="Restablecer el acceso al portal del colaborador">Portal</button>' : '') +
           (activosEmp>0 ?
+            '<button type="button" class="link" data-action="print-resguardo-emp" data-id="'+emp.id+'" style="font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:4px;" title="Emitir formato de resguardo de herramienta con sus resguardos activos">'+icon("print")+' Formato</button>' +
             (verCostos ?
               '<button type="button" class="countChip hasCost" data-action="view-employee-tools" data-id="'+emp.id+'" title="Ver resguardos y desglose de costo">'+activosEmp+' en resguardo · <b>'+formatMoney(costoEmp)+'</b> '+icon("chevron")+'</button>' :
               '<button type="button" class="countChip" data-action="view-employee-tools" data-id="'+emp.id+'">'+activosEmp+' en resguardo '+icon("chevron")+'</button>'
@@ -1756,6 +1849,7 @@
     return '' +
     '<div class="overlay'+overlayEnter+'"><div class="modal">' +
       '<div class="modalHead"><div class="modalTitle">'+esc(emp.nombre)+'</div>' +
+      (items.length > 0 ? '<button type="button" class="btnGhost" style="min-height:34px;padding:6px 12px;font-size:13px;margin-left:auto;margin-right:8px;display:inline-flex;align-items:center;gap:6px;" data-action="print-resguardo-emp" data-id="'+emp.id+'">'+icon("print")+' Emitir formato</button>' : '') +
       '<button type="button" class="closeBtn" data-action="close-employee-tools" aria-label="Cerrar">'+icon("x")+'</button></div>' +
       '<p class="hint" style="margin:-8px 0 16px;font-size:14px;color:var(--label2);">Herramienta actualmente en resguardo. Quitar aquí pedirá correo y contraseña de un supervisor o administrador.</p>' +
       (verCostos && totalEmpValor > 0 ?
@@ -3319,6 +3413,7 @@
         case "clear-cobros-query": { ui.cobrosQuery = ""; render(); break; }
         case "print-now": try{ window.print(); }catch(e3){} break;
         case "print-close": ui.print = null; render(); break;
+        case "print-resguardo-emp": ui.print = { tipo: "resguardo", employeeId: id }; render(); break;
         case "auth-cancel": if(ui.authFlow && !ui.authFlow.pending){ ui.authFlow = null; render(); } break;
         case "edit-fecha-start":
           ui.editingFechaId = id;

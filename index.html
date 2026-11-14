@@ -519,7 +519,41 @@
   .shTable small{color:#5E5E63;font-size:8pt;}
   .shTable td.box{width:44px;}
   .sheetList .shSigns{padding-top:46px;}
-  @media (max-width:900px){ .sheet{padding:0.45in 0.4in;min-height:0;} .shSigns{gap:20px;} }
+  /* Formato oficial: Resguardo de Herramienta y/o Equipo */
+  .resSheet{width:8.5in;min-height:11in;max-width:100%;margin:0 auto 24px;background:#fff;color:#000;padding:0.32in 0.42in 0.3in;
+    box-shadow:0 20px 50px -12px rgba(0,0,0,.45);font-family:Arial,Helvetica,sans-serif;font-size:8.5pt;line-height:1.2;
+    display:flex;flex-direction:column;box-sizing:border-box;animation:modalIn 320ms var(--ease-out) both;}
+  .resSheet:last-child{margin-bottom:0;}
+  .resHdrTable,.resMetaTable,.resMainTable,.resDebtTable{width:100%;border-collapse:collapse;table-layout:fixed;}
+  .resHdrTable{border:1.5px solid #000;margin-bottom:5px;}
+  .resHdrTable td{border:1px solid #000;padding:2px 6px;vertical-align:middle;color:#000;background:#fff;}
+  .resHdrLogo{width:104px;text-align:center;padding:3px !important;}
+  .resHdrLogo img{width:76px;height:44px;object-fit:contain;display:block;margin:0 auto;}
+  .resHdrTitle{text-align:center;font-weight:700;font-size:10.5pt;letter-spacing:.01em;padding:5px 6px !important;}
+  .resHdrAprobo{font-size:7.5pt;padding:3px 6px !important;}
+  .resHdrCtrl{width:136px;font-size:7pt;padding:2px 5px !important;line-height:1.25;}
+  .resMetaTable{border:1.5px solid #000;margin-bottom:5px;}
+  .resMetaTable td{border:1px solid #000;padding:2px 6px;font-size:8.5pt;color:#000;background:#fff;vertical-align:middle;}
+  .resMetaLbl{font-weight:700;}
+  .resMainTable{border:1.5px solid #000;}
+  .resMainTable th,.resMainTable td{border:1px solid #000;padding:1.5px 4px;font-size:8pt;line-height:1.15;color:#000;background:#fff;vertical-align:middle;}
+  .resMainTable th{font-weight:700;text-align:center;font-size:8.5pt;padding:2.5px 4px;background:#fff;}
+  .resMainTable td{height:18px;}
+  .resMainTable td.cNo{text-align:center;width:28px;}
+  .resMainTable td.cQty{text-align:center;width:62px;}
+  .resMainTable td.cDesc{word-break:break-word;}
+  .resMainTable td.cObs{width:196px;word-break:break-word;}
+  .resMainTable td.cEnd{text-align:center;font-weight:600;}
+  .resPageNum{text-align:right;font-size:8.5pt;margin:2px 0 3px;color:#000;}
+  .resDebtTable{border:1.5px solid #000;margin-bottom:6px;}
+  .resDebtTable th,.resDebtTable td{border:1px solid #000;padding:1.5px 4px;font-size:8pt;color:#000;background:#fff;vertical-align:middle;}
+  .resDebtTable th{font-weight:700;text-align:center;font-size:8.5pt;padding:2px 4px;}
+  .resDebtTable td{height:15px;}
+  .resLegal{font-size:8.5pt;font-weight:700;font-style:italic;line-height:1.3;margin:3px 0 7px;color:#000;}
+  .resSignBox{border:1.5px solid #000;padding:26px 42px 8px;display:grid;grid-template-columns:1fr 1fr;gap:52px;text-align:center;margin-top:auto;}
+  .resSignLine{border-top:1px solid #000;margin-bottom:3px;}
+  .resSignLabel{font-size:7.5pt;font-weight:700;line-height:1.25;color:#000;}
+  @media (max-width:900px){ .sheet{padding:0.45in 0.4in;min-height:0;} .shSigns{gap:20px;} .resSheet{padding:0.25in;min-height:0;} .resSignBox{gap:20px;padding:22px 16px 8px;} }
   @page{size:letter;margin:0;}
   @media print{
     :root, [data-theme="dark"]{
@@ -531,9 +565,11 @@
     .shell,.toast,.overlay,.printBar,.splash,.railLogo{display:none !important;}
     .printOverlay{position:static;background:none;display:block;animation:none;}
     .printStage{padding:0;overflow:visible;}
-    .sheet{box-shadow:none;margin:0;width:8.5in;max-width:none;min-height:11in;animation:none;page-break-after:always;}
+    .sheet,.resSheet{box-shadow:none;margin:0;width:8.5in;max-width:none;min-height:11in;animation:none;page-break-after:always;break-after:page;}
+    .sheet:last-child,.resSheet:last-child{page-break-after:auto;break-after:auto;}
+    .resSheet{height:11in;}
     .sheetList{min-height:0;}
-    .shTable tr{break-inside:avoid;}
+    .shTable tr,.resMainTable tr{break-inside:avoid;}
     .shHead,.shTable th{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   }
 
