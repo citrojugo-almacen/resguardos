@@ -1487,9 +1487,11 @@
         if(emp.nivelJerarquico && emp.nivelJerarquico !== 'operativo'){
           var lbl = emp.nivelJerarquico === 'director_general' ? '★ Dir. General' :
                     emp.nivelJerarquico === 'director' ? 'Director' :
+                    emp.nivelJerarquico === 'nominas' ? 'Nóminas' :
                     emp.nivelJerarquico === 'gerente' ? 'Gerente' : 'Supervisor';
           var stColor = emp.nivelJerarquico === 'director_general' ? 'background:var(--brandDeep);color:#fff;' :
                         emp.nivelJerarquico === 'director' ? 'background:var(--tint);color:#fff;' :
+                        emp.nivelJerarquico === 'nominas' ? 'background:#0369a1;color:#fff;' :
                         'background:var(--tintSoft);color:var(--tint);';
           lvlBadge = '<span class="badgeBio" style="' + stColor + '" title="Líder con facultades de auditoría de resguardos">' + esc(lbl) + '</span> ';
         }
@@ -1722,6 +1724,7 @@
         '<select id="sel-lider-nivel" style="width:100%;height:44px;border-radius:var(--r-sm);border:1px solid var(--sepStrong);background:var(--surface);padding:0 12px;font-size:15px;color:var(--label);">' +
           '<option value="director_general"'+(m.nivel === "director_general" ? ' selected' : '')+'>★ Director General (Empresa completa + Costos)</option>' +
           '<option value="director"'+(m.nivel === "director" ? ' selected' : '')+'>Director de Área (Áreas asignadas + Costos)</option>' +
+          '<option value="nominas"'+(m.nivel === "nominas" ? ' selected' : '')+'>Jefatura / Personal de Nóminas (Adeudos + Costos)</option>' +
           '<option value="gerente"'+(m.nivel === "gerente" ? ' selected' : '')+'>Gerente (Departamento sin costos)</option>' +
           '<option value="supervisor"'+(m.nivel === "supervisor" ? ' selected' : '')+'>Supervisor / Coordinador (Equipo directo sin costos)</option>' +
         '</select>' +

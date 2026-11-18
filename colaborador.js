@@ -62,10 +62,20 @@
     equipoQuery: "",
     equipoFiltro: "todos",     // todos | con_herramienta | pendientes
     expandedSubId: null,
-    vistaModo: "personal",     // personal | global (solo directores)
+    vistaModo: "personal",     // personal | global | adeudos (directores y nóminas)
     globalData: null,
     globalLoading: false,
     globalQuery: "",
+    globalFiltro: "todos",     // todos | danados | no_localizados | atrasados
+    prefsOpen: false,
+    prefs: null,
+    techo: null,
+    prefsPending: false,
+    adeudosData: null,
+    adeudosLoading: false,
+    adeudosQuery: "",
+    adeudosFiltro: "todos",    // todos | pendiente_cobro | saldado
+    saldarModal: null,
     addColabNumero: "",
     addColabPending: false,
     addColabError: ""
@@ -132,7 +142,8 @@
       plus:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
       trash:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
       sun:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
-      moon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>'
+      moon:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>',
+      sliders:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>'
     };
     return I[n] || "";
   }
@@ -502,6 +513,219 @@
     });
   }
 
+  function loadPrefs(){
+    if(!st.token) return;
+    call("colab_preferencias_get", { p_token: st.token }).then(function(r){
+      if(r && r.ok){
+        st.prefs = r.prefs || {};
+        st.techo = r.techo || {};
+        if(st.techo && st.techo.nivel === "nominas" && st.vistaModo === "personal"){
+          st.vistaModo = "adeudos";
+          if(!st.adeudosData) loadAdeudos();
+        }
+        render();
+      }
+    }).catch(function(){});
+  }
+
+  function savePref(key, val){
+    if(!st.token || !st.prefs || st.prefsPending) return;
+    var next = {};
+    for(var k in st.prefs){ if(Object.prototype.hasOwnProperty.call(st.prefs, k)) next[k] = st.prefs[k]; }
+    next[key] = val;
+    st.prefsPending = true; render();
+    call("colab_preferencias_set", { p_token: st.token, p_prefs: next }).then(function(r){
+      st.prefsPending = false;
+      if(r && r.ok){
+        st.prefs = r.prefs || next;
+        if(key === "mostrar_costos"){
+          if(st.globalData) loadGlobal();
+          if(st.adeudosData) loadAdeudos();
+        }
+        if(key === "ver_adeudos" && !st.prefs.ver_adeudos && st.vistaModo === "adeudos"){
+          st.vistaModo = "personal";
+        }
+        toast("ok", "Preferencia guardada.");
+      } else if(r && r.mensaje){
+        toast("err", r.mensaje);
+      }
+      render();
+    }).catch(function(e){
+      st.prefsPending = false;
+      toast("err", e && e.message ? e.message : "No se pudo guardar la preferencia.");
+      render();
+    });
+  }
+
+  function loadAdeudos(){
+    if(!st.token) return;
+    st.adeudosLoading = true; render();
+    call("colab_adeudos_pendientes", { p_token: st.token }).then(function(r){
+      st.adeudosLoading = false;
+      if(r && r.ok){
+        st.adeudosData = r;
+      } else {
+        st.adeudosData = null;
+        if(r && r.mensaje) toast("err", r.mensaje);
+      }
+      render();
+    }, function(e){
+      st.adeudosLoading = false;
+      st.adeudosData = null;
+      toast("err", e && e.message ? e.message : "Error al cargar adeudos.");
+      render();
+    });
+  }
+
+  function bufToHex(buf){
+    var arr = new Uint8Array(buf), out = "", i;
+    for(i = 0; i < arr.length; i++) out += ("0" + arr[i].toString(16)).slice(-2);
+    return out;
+  }
+
+  function fmtBytes(n){
+    if(n < 1024) return n + " B";
+    if(n < 1048576) return (n / 1024).toFixed(1) + " KB";
+    return (n / 1048576).toFixed(2) + " MB";
+  }
+
+  function sha256Blob(blob){
+    return blob.arrayBuffer().then(function(buf){
+      return crypto.subtle.digest("SHA-256", buf).then(bufToHex);
+    });
+  }
+
+  function compressDocument(file){
+    if(!file) return Promise.reject(new Error("Selecciona un archivo justificante."));
+    var orig = file.size || 0;
+    var type = String(file.type || "").toLowerCase();
+    if(type.indexOf("image/") === 0){
+      return new Promise(function(resolve, reject){
+        var url = URL.createObjectURL(file);
+        var img = new Image();
+        img.onload = function(){
+          try{
+            var maxSide = 1400, w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+            if(w > maxSide || h > maxSide){
+              if(w >= h){ h = Math.round(h * maxSide / w); w = maxSide; }
+              else { w = Math.round(w * maxSide / h); h = maxSide; }
+            }
+            var c = document.createElement("canvas");
+            c.width = w; c.height = h;
+            var ctx = c.getContext("2d");
+            ctx.drawImage(img, 0, 0, w, h);
+            URL.revokeObjectURL(url);
+            c.toBlob(function(webpBlob){
+              var finish = function(b){
+                if(!b || b.size <= 0) return reject(new Error("No se pudo comprimir la imagen."));
+                if(b.size > 2097152) return reject(new Error("La imagen comprimida supera los 2 MB."));
+                sha256Blob(b).then(function(hHex){
+                  resolve({ blob: b, mime: b.type || "image/webp", bytes: b.size, originalBytes: orig, sha256: hHex, name: file.name || "justificante.webp" });
+                }, reject);
+              };
+              if(!webpBlob) c.toBlob(finish, "image/jpeg", 0.65);
+              else finish(webpBlob);
+            }, "image/webp", 0.65);
+          } catch(err){
+            URL.revokeObjectURL(url);
+            reject(err);
+          }
+        };
+        img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error("No se pudo leer la imagen.")); };
+        img.src = url;
+      });
+    }
+    if(type === "application/pdf"){
+      if(orig <= 1048576){
+        return sha256Blob(file).then(function(hHex){
+          return { blob: file, mime: "application/pdf", bytes: orig, originalBytes: orig, sha256: hHex, name: file.name || "justificante.pdf" };
+        });
+      }
+      if(typeof window.CompressionStream === "function"){
+        var gzStream = file.stream().pipeThrough(new window.CompressionStream("gzip"));
+        return new Response(gzStream).blob().then(function(gzBlob){
+          if(gzBlob.size > 2097152) throw new Error("El PDF supera 2 MB incluso comprimido. Sube una foto o PDF más ligero.");
+          var gzTyped = new Blob([gzBlob], { type: "application/gzip" });
+          return sha256Blob(gzTyped).then(function(hHex){
+            return { blob: gzTyped, mime: "application/gzip", bytes: gzTyped.size, originalBytes: orig, sha256: hHex, name: (file.name || "justificante.pdf") + ".gz" };
+          });
+        });
+      }
+      return Promise.reject(new Error("El PDF supera 1 MB. Comprímelo o toma una foto del documento."));
+    }
+    return Promise.reject(new Error("Formato no permitido. Usa imagen (JPG, PNG, WebP) o PDF."));
+  }
+
+  function uploadJustificante(colId, fileInfo){
+    var fd = new FormData();
+    fd.append("p_token", st.token);
+    fd.append("p_colaborador_id", colId);
+    fd.append("file", fileInfo.blob, fileInfo.name);
+    return fetch(API_URL + "/functions/v1/justificante-adeudo", {
+      method: "POST",
+      headers: { "apikey": API_KEY, "Authorization": "Bearer " + API_KEY },
+      body: fd
+    }).then(function(r){
+      return r.json().then(function(d){
+        if(!r.ok || !d || !d.ok) throw new Error((d && d.mensaje) || "Error al subir justificante.");
+        return d;
+      });
+    });
+  }
+
+  function openJustificante(path){
+    if(!st.token || !path) return;
+    fetch(API_URL + "/functions/v1/justificante-adeudo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": API_KEY, "Authorization": "Bearer " + API_KEY },
+      body: JSON.stringify({ action: "url", p_token: st.token, path: path })
+    }).then(function(r){
+      return r.json().then(function(d){
+        if(!r.ok || !d || !d.ok || !d.signedUrl) throw new Error((d && d.mensaje) || "No se pudo abrir el justificante.");
+        window.open(d.signedUrl, "_blank", "noopener");
+      });
+    }).catch(function(e){
+      toast("err", e && e.message ? e.message : "Error al abrir justificante.");
+    });
+  }
+
+  function submitSaldarAdeudo(){
+    var m = st.saldarModal;
+    if(!m || m.pending) return;
+    var motEl = document.getElementById("in-saldar-motivo");
+    var motivo = motEl ? motEl.value.trim() : (m.motivo || "").trim();
+    m.motivo = motivo;
+    m.error = "";
+    if(motivo.length < 5){ m.error = "Escribe un motivo o referencia de finiquito/cobro (mínimo 5 caracteres)."; render(); return; }
+    if(!m.fileInfo){ m.error = "Debes cargar un documento justificante (foto o PDF)."; render(); return; }
+    m.pending = true; render();
+    uploadJustificante(m.colaborador_id, m.fileInfo).then(function(up){
+      return call("colab_saldar_adeudo", {
+        p_token: st.token,
+        p_colaborador_id: m.colaborador_id,
+        p_motivo: motivo,
+        p_storage_path: up.storage_path,
+        p_mime_type: up.mime_type,
+        p_bytes: up.bytes,
+        p_sha256: up.sha256,
+        p_nombre_archivo: m.fileInfo.name
+      });
+    }).then(function(res){
+      m.pending = false;
+      if(!res || !res.ok){
+        m.error = (res && res.mensaje) || "No se pudo saldar el adeudo.";
+        render(); return;
+      }
+      st.saldarModal = null;
+      toast("ok", "Adeudo saldado y justificante archivado (" + (res.herramientas_saldadas || 0) + " herramienta(s)).");
+      loadAdeudos();
+    }).catch(function(e){
+      m.pending = false;
+      m.error = (e && e.message) ? e.message : "Error al procesar el justificante.";
+      render();
+    });
+  }
+
   function submitAddColab(){
     var inp = document.getElementById("in-add-colab-num");
     var num = inp ? inp.value.trim() : "";
@@ -576,6 +800,28 @@
     });
   }
 
+  function prefsPanelTpl(){
+    if(!st.prefsOpen || !st.prefs) return '';
+    var pf = st.prefs, tc = st.techo || {};
+    var row = function(key, title, desc, checked, disabled){
+      return '<div class="prefRow">' +
+        '<div class="prefMeta"><b>' + esc(title) + '</b><span>' + esc(desc) + '</span></div>' +
+        '<label class="switchToggle">' +
+          '<input type="checkbox" data-action="pref-toggle" data-pref="' + esc(key) + '"' + (checked ? ' checked' : '') + (disabled || st.prefsPending ? ' disabled' : '') + '/>' +
+          '<span class="switchSlider"></span>' +
+        '</label>' +
+      '</div>';
+    };
+    return '<section class="prefsPanel" aria-label="Preferencias de consulta">' +
+      '<h4>Preferencias de consulta (activar / desactivar)</h4>' +
+      (tc.puede_ver_costos ? row("mostrar_costos", "Mostrar costos monetarios", "Oculta precios unitarios y capital total al proyectar o compartir pantalla.", !!pf.mostrar_costos, false) : '') +
+      row("alerta_danados", "Alertas de herramientas dañadas", "Muestra el filtro rápido de herramientas reportadas como dañadas en revisión.", pf.alerta_danados !== false, false) +
+      row("alerta_no_localizados", "Alertas de herramientas no localizadas", "Muestra el filtro rápido de herramientas no localizadas en auditoría.", pf.alerta_no_localizados !== false, false) +
+      row("alerta_auditoria", "Alertas de auditoría atrasada", "Destaca herramientas sin revisión reciente (umbral actual: " + (pf.alerta_auditoria_dias || 180) + " días).", pf.alerta_auditoria !== false, false) +
+      (tc.puede_ver_adeudos ? row("ver_adeudos", "Mostrar vista de Adeudos y finiquitos", "Activa o desactiva la pestaña ejecutiva de bajas con pendiente de cobro.", pf.ver_adeudos !== false, false) : '') +
+    '</section>';
+  }
+
   function globalTpl(){
     if(st.globalLoading){
       return '<div class="loadingBox"><span class="spin"></span> Cargando todos los resguardos de la empresa...</div>';
@@ -586,9 +832,23 @@
     var gd = st.globalData;
     var res = gd.resumen || {};
     var all = gd.resguardos || [];
+    var pf = st.prefs || {};
+    var hoy = (st.data && st.data.hoy) || new Date().toISOString().slice(0, 10);
+    var umbralDias = Number(pf.alerta_auditoria_dias || 180);
 
+    var danadosCnt = 0, noLocCnt = 0, atrasCnt = 0;
+    all.forEach(function(r){
+      if(r.revision_resultado === "danado") danadosCnt++;
+      if(r.revision_resultado === "no_localizado") noLocCnt++;
+      if(!r.revision_en || daysBetween(r.revision_en, hoy) >= umbralDias) atrasCnt++;
+    });
+
+    var gf = st.globalFiltro || "todos";
     var q = String(st.globalQuery || "").trim().toLowerCase();
     var filtered = all.filter(function(r){
+      if(gf === "danados" && r.revision_resultado !== "danado") return false;
+      if(gf === "no_localizados" && r.revision_resultado !== "no_localizado") return false;
+      if(gf === "atrasados" && r.revision_en && daysBetween(r.revision_en, hoy) < umbralDias) return false;
       if(!q) return true;
       var cNombre = String(r.colaborador || "").toLowerCase();
       var cNum = String(r.numero_empleado || "").toLowerCase();
@@ -600,6 +860,13 @@
       return cNombre.indexOf(q) >= 0 || cNum.indexOf(q) >= 0 || cArea.indexOf(q) >= 0 || cPuesto.indexOf(q) >= 0 || rTool.indexOf(q) >= 0 || rOcc.indexOf(q) >= 0 || rId.indexOf(q) >= 0;
     });
 
+    var alertsBar = '<div class="alertChips">' +
+      '<button type="button" class="alertChip' + (gf === "todos" ? ' on' : '') + '" data-action="filtro-global" data-f="todos">Todos (' + all.length + ')</button>' +
+      (pf.alerta_danados !== false ? '<button type="button" class="alertChip bad' + (gf === "danados" ? ' on' : '') + '" data-action="filtro-global" data-f="danados">Dañados <b>(' + danadosCnt + ')</b></button>' : '') +
+      (pf.alerta_no_localizados !== false ? '<button type="button" class="alertChip bad' + (gf === "no_localizados" ? ' on' : '') + '" data-action="filtro-global" data-f="no_localizados">No localizados <b>(' + noLocCnt + ')</b></button>' : '') +
+      (pf.alerta_auditoria !== false ? '<button type="button" class="alertChip warn' + (gf === "atrasados" ? ' on' : '') + '" data-action="filtro-global" data-f="atrasados">Auditoría +' + umbralDias + 'd <b>(' + atrasCnt + ')</b></button>' : '') +
+    '</div>';
+
     var html = '<div class="globalWrap">' +
       '<div class="leaderHead">' +
         '<div class="leaderTitle">' + icon("shield") + ' Resguardos Globales de la Empresa</div>' +
@@ -609,8 +876,9 @@
       '<div class="summary" style="margin:0 0 16px;">' +
         '<div class="sumItem s-on"><div class="sumLabel">Resguardos activos</div><div class="sumValue">' + res.total_resguardos_activos + '</div><div class="sumSub">' + res.total_piezas + ' piezas</div></div>' +
         '<div class="sumItem"><div class="sumLabel">Colaboradores</div><div class="sumValue">' + res.colaboradores_con_herramienta + '</div><div class="sumSub">con herramienta</div></div>' +
-        '<div class="sumItem"><div class="sumLabel">Capital en campo</div><div class="sumValue" style="font-size:24px;">' + (res.capital_total != null ? fmtMoney(res.capital_total) : '—') + '</div><div class="sumSub">Valuación patrimonial</div></div>' +
+        '<div class="sumItem"><div class="sumLabel">Capital en campo</div><div class="sumValue" style="font-size:24px;">' + (res.capital_total != null ? fmtMoney(res.capital_total) : 'Oculto') + '</div><div class="sumSub">' + (res.capital_total != null ? 'Valuación patrimonial' : 'Costos ocultos por perfil/preferencia') + '</div></div>' +
       '</div>' +
+      alertsBar +
       '<div class="field" style="margin-bottom:12px;">' +
         '<input type="text" id="in-search-global" placeholder="Buscar colaborador, número, puesto, área, herramienta u OCC..." value="' + esc(st.globalQuery) + '"/>' +
       '</div>' +
@@ -656,6 +924,102 @@
     return html;
   }
 
+  function adeudosTpl(){
+    if(st.adeudosLoading){
+      return '<div class="loadingBox"><span class="spin"></span> Cargando adeudos y finiquitos...</div>';
+    }
+    if(!st.adeudosData || !st.adeudosData.ok){
+      return '<div class="empty"><span class="emptyIco">' + icon("shield") + '</span><b>Adeudos y finiquitos</b><p class="hint">No se pudieron cargar los adeudos.</p><button type="button" class="btnGhost" data-action="reload-adeudos" style="margin-top:12px;width:auto;">Reintentar</button></div>';
+    }
+    var ad = st.adeudosData, res = ad.resumen || {}, all = ad.adeudos || [];
+    var q = String(st.adeudosQuery || "").trim().toLowerCase();
+    var af = st.adeudosFiltro || "todos";
+    var filtered = all.filter(function(a){
+      if(af !== "todos" && a.estatus !== af) return false;
+      if(!q) return true;
+      return String(a.nombre || "").toLowerCase().indexOf(q) >= 0 ||
+        String(a.numero_empleado || "").toLowerCase().indexOf(q) >= 0 ||
+        String(a.folio_cda || "").toLowerCase().indexOf(q) >= 0 ||
+        String(a.area || "").toLowerCase().indexOf(q) >= 0;
+    });
+
+    var html = '<div class="globalWrap">' +
+      '<div class="leaderHead">' +
+        '<div class="leaderTitle">' + icon("shield") + ' Adeudos y Finiquitos</div>' +
+        '<span class="badgeLevel ' + (ad.puede_saldar ? 'lvl-nom' : 'lvl-dg') + '">' + (ad.puede_saldar ? 'Modo Nóminas · Saldado con Justificante' : 'Solo Consulta') + '</span>' +
+      '</div>' +
+      '<p class="hint" style="margin:0 0 14px;">' + (ad.puede_saldar ? 'Puedes marcar como saldada la deuda de herramienta cargando el documento justificante (comprimido automáticamente para no consumir base de datos).' : 'Consulta ejecutiva de bajas con adeudo pendiente de cobro o ya saldado.') + '</p>' +
+      '<div class="summary" style="margin:0 0 16px;">' +
+        '<div class="sumItem s-old"><div class="sumLabel">Pendientes de cobro</div><div class="sumValue">' + (res.pendientes_count || 0) + '</div><div class="sumSub">bajas con adeudo</div></div>' +
+        '<div class="sumItem"><div class="sumLabel">Saldados</div><div class="sumValue">' + (res.saldados_count || 0) + '</div><div class="sumSub">con justificante</div></div>' +
+        '<div class="sumItem s-on"><div class="sumLabel">Por recuperar</div><div class="sumValue" style="font-size:22px;">' + (res.total_por_recuperar != null ? fmtMoney(res.total_por_recuperar) : 'Oculto') + '</div><div class="sumSub">total pendiente</div></div>' +
+      '</div>' +
+      '<div class="alertChips">' +
+        '<button type="button" class="alertChip' + (af === "todos" ? ' on' : '') + '" data-action="filtro-adeudos" data-f="todos">Todos (' + all.length + ')</button>' +
+        '<button type="button" class="alertChip bad' + (af === "pendiente_cobro" ? ' on' : '') + '" data-action="filtro-adeudos" data-f="pendiente_cobro">Pendientes (' + (res.pendientes_count || 0) + ')</button>' +
+        '<button type="button" class="alertChip' + (af === "saldado" ? ' on' : '') + '" data-action="filtro-adeudos" data-f="saldado">Saldados (' + (res.saldados_count || 0) + ')</button>' +
+      '</div>' +
+      '<div class="field" style="margin-bottom:12px;">' +
+        '<input type="text" id="in-search-adeudos" placeholder="Buscar por colaborador, # de empleado, área o folio CDA..." value="' + esc(st.adeudosQuery) + '"/>' +
+      '</div>' +
+      (filtered.length === 0 ? '<div class="empty"><b>Sin registros</b>No hay adeudos que coincidan con tu filtro.</div>' :
+      '<div class="adeudoList">' + filtered.map(function(a){
+        var isPend = a.estatus === "pendiente_cobro";
+        var j = a.justificante;
+        var toolsHtml = (a.herramientas && a.herramientas.length)
+          ? '<div class="adeudoTools">' + a.herramientas.map(function(h){
+              return '<div class="adeudoToolRow"><span>' + esc(h.herramienta) + (h.cantidad > 1 ? ' <b>×' + h.cantidad + '</b>' : '') + '</span><b>' + (h.importe != null ? fmtMoney(h.importe) : '') + '</b></div>';
+            }).join('') + '</div>'
+          : '';
+        var justHtml = j
+          ? '<div class="hint" style="margin-top:8px;"><b>Saldado por:</b> ' + esc(j.saldado_por || 'Nóminas') + ' · ' + fmt(j.saldado_en) + '<br/><b>Motivo:</b> ' + esc(j.motivo) + ' · <span style="font-family:var(--mono);">' + fmtBytes(j.bytes || 0) + '</span></div>'
+          : '';
+        return '<article class="adeudoCard ' + (isPend ? 'pendiente' : 'saldado') + '">' +
+          '<div class="adeudoHead">' +
+            '<div><b>' + esc(titleCase(a.nombre)) + '</b> <span class="numEmpCode">#' + esc(a.numero_empleado) + '</span>' +
+              '<div style="font-size:12px;color:var(--label3);">' + esc(sentenceCase(a.puesto)) + (a.area ? ' · ' + esc(titleCase(a.area)) : '') + (a.fecha_baja ? ' · Baja: ' + fmt(a.fecha_baja) : '') + (a.folio_cda ? ' · <b>' + esc(a.folio_cda) + '</b>' : '') + '</div>' +
+            '</div>' +
+            '<span class="adeudoStatus ' + (isPend ? 'pendiente' : 'saldado') + '">' + (isPend ? 'Pendiente de cobro' : 'Saldado') + '</span>' +
+          '</div>' +
+          toolsHtml +
+          justHtml +
+          '<div class="adeudoActions">' +
+            '<div><small style="color:var(--label3);">Monto adeudo:</small> <b>' + (a.total_adeudo != null ? fmtMoney(a.total_adeudo) : 'Oculto') + '</b></div>' +
+            (isPend && ad.puede_saldar
+              ? '<button type="button" class="btnPrimary" style="width:auto;padding:8px 14px;font-size:13px;" data-action="open-saldar" data-id="' + esc(a.colaborador_id) + '" data-nombre="' + esc(a.nombre) + '" data-num="' + esc(a.numero_empleado) + '" data-total="' + esc(a.total_adeudo != null ? fmtMoney(a.total_adeudo) : '') + '">Saldar adeudo con justificante</button>'
+              : (j && j.storage_path ? '<button type="button" class="btnGhost" style="width:auto;padding:7px 12px;font-size:12.5px;" data-action="ver-justificante" data-path="' + esc(j.storage_path) + '">Ver justificante (' + fmtBytes(j.bytes || 0) + ')</button>' : '')) +
+          '</div>' +
+        '</article>';
+      }).join('') + '</div>') +
+    '</div>';
+    return html;
+  }
+
+  function saldarModalTpl(){
+    if(!st.saldarModal) return '';
+    var m = st.saldarModal, fi = m.fileInfo;
+    var pct = (fi && fi.originalBytes > 0) ? Math.max(0, Math.round((1 - (fi.bytes / fi.originalBytes)) * 100)) : 0;
+    return '<div class="overlay" data-action="saldar-backdrop"><form id="f-saldar-adeudo" class="modal">' +
+      '<div class="modalHead"><div>' +
+        '<div class="modalTitle">Saldar adeudo de herramienta</div>' +
+        '<p class="modalSub">' + esc(titleCase(m.nombre)) + ' (#' + esc(m.numero_empleado) + ')' + (m.total ? ' · ' + esc(m.total) : '') + '</p>' +
+      '</div><button type="button" class="closeBtn" data-action="close-saldar" aria-label="Cerrar">✕</button></div>' +
+      '<div class="field"><label for="in-saldar-motivo">Motivo / Folio de finiquito o recibo *</label>' +
+        '<input type="text" id="in-saldar-motivo" placeholder="Ej. Descuento aplicado en finiquito #..." value="' + esc(m.motivo || '') + '" maxlength="240" required/>' +
+      '</div>' +
+      '<div class="field" style="margin-top:12px;"><label for="in-saldar-file">Documento justificante * (Foto o PDF)</label>' +
+        '<input type="file" id="in-saldar-file" accept="image/jpeg,image/png,image/webp,application/pdf"/>' +
+        '<p class="hint" style="margin:6px 0 0;">Las imágenes se comprimen automáticamente en tu dispositivo y se guardan fuera de la base de datos.</p>' +
+        (fi ? '<div class="compInfo">Archivo listo: ' + esc(fi.name) + ' · ' + fmtBytes(fi.originalBytes) + ' → <b>' + fmtBytes(fi.bytes) + '</b>' + (pct > 0 ? ' (-' + pct + '%)' : '') + '</div>' : '') +
+      '</div>' +
+      (m.error ? '<p class="errorText" role="alert">' + icon("alert") + '<span>' + esc(m.error) + '</span></p>' : '') +
+      '<div style="display:flex;gap:10px;margin-top:16px;">' +
+        '<button type="button" class="btnGhost" data-action="close-saldar" style="flex:1;"' + (m.pending ? ' disabled' : '') + '>Cancelar</button>' +
+        '<button type="submit" class="btnPrimary" style="flex:1;"' + (m.pending ? ' disabled' : '') + '>' + (m.pending ? 'Subiendo y saldando…' : 'Confirmar y saldar') + '</button>' +
+      '</div>' +
+    '</form></div>';
+  }
+
   function equipoTpl(){
     if(!st.equipoData || !st.equipoData.ok) return '';
     var eq = st.equipoData;
@@ -666,27 +1030,41 @@
     var lvlMap = {
       director_general: { label: "Director General", cls: "lvl-dg", ico: "star" },
       director: { label: "Director de Área", cls: "lvl-dir", ico: "shield" },
+      nominas: { label: "Jefatura de Nóminas", cls: "lvl-nom", ico: "shield" },
       gerente: { label: "Gerente", cls: "lvl-ger", ico: "users" },
       supervisor: { label: "Supervisor / Coordinador", cls: "lvl-sup", ico: "users" }
     };
     var lInfo = lvlMap[lider.nivel] || { label: "Líder de Área", cls: "lvl-sup", ico: "users" };
     var esDir = !!(lider.es_director || lider.nivel === "director_general" || lider.nivel === "director");
+    var esNom = !!(lider.es_nominas || lider.nivel === "nominas");
+    var pf = st.prefs || {};
 
     var html = '';
 
-    // Conmutador ejecutivo para Directores y Director General
-    if(esDir){
-      html += '<div class="execToggle">' +
-        '<button type="button" class="execToggleBtn' + (st.vistaModo === "personal" ? ' on' : '') + '" data-action="toggle-vista-modo" data-modo="personal">' +
-          icon("users") + ' Mi personal (' + list.length + ')' +
-        '</button>' +
-        '<button type="button" class="execToggleBtn' + (st.vistaModo === "global" ? ' on' : '') + '" data-action="toggle-vista-modo" data-modo="global">' +
-          icon("shield") + ' Toda la empresa (Consulta)' +
-        '</button>' +
-      '</div>';
+    // Conmutador ejecutivo y panel de preferencias (Directores y Nóminas)
+    if(esDir || esNom){
+      var verAdeudos = esNom || (pf.ver_adeudos !== false);
+      html += '<div class="prefsBar">' +
+        '<div class="execToggle" style="margin:0;flex:1;">' +
+          '<button type="button" class="execToggleBtn' + (st.vistaModo === "personal" ? ' on' : '') + '" data-action="toggle-vista-modo" data-modo="personal">' +
+            icon("users") + ' Mi personal (' + list.length + ')' +
+          '</button>' +
+          '<button type="button" class="execToggleBtn' + (st.vistaModo === "global" ? ' on' : '') + '" data-action="toggle-vista-modo" data-modo="global">' +
+            icon("shield") + ' Toda la empresa' +
+          '</button>' +
+          (verAdeudos ? '<button type="button" class="execToggleBtn' + (st.vistaModo === "adeudos" ? ' on' : '') + '" data-action="toggle-vista-modo" data-modo="adeudos">' +
+            icon("alert") + ' Adeudos y finiquitos' +
+          '</button>' : '') +
+        '</div>' +
+        '<button type="button" class="prefsBtn' + (st.prefsOpen ? ' on' : '') + '" data-action="toggle-prefs">' + icon("sliders") + ' Preferencias</button>' +
+      '</div>' +
+      prefsPanelTpl();
 
       if(st.vistaModo === "global"){
         return html + globalTpl();
+      }
+      if(st.vistaModo === "adeudos" && verAdeudos){
+        return html + adeudosTpl();
       }
     }
 
@@ -877,7 +1255,7 @@
   // ---------- Render ----------
   function render(){
     var keep = captureInputs();
-    var html = st.view === "activar" ? activarTpl() : st.view === "nip" ? nipTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() : loginTpl();
+    var html = st.view === "activar" ? activarTpl() : st.view === "nip" ? nipTpl() : st.view === "portal" ? portalTpl() + pwModalTpl() + saldarModalTpl() : loginTpl();
     if(st.toast) html += '<div class="toast ' + (st.toast.type === "err" ? "err" : "") + '" role="status"><span class="tIcon">' + icon(st.toast.type === "err" ? "alert" : "check") + '</span>' + esc(st.toast.msg) + '</div>';
     app.innerHTML = html;
     restoreInputs(keep);
@@ -1038,6 +1416,9 @@
       st.equipoLoading = false;
       if(res && res.ok){
         st.equipoData = res;
+        if(res.lider && (res.lider.es_director || res.lider.es_nominas || res.lider.nivel === "director_general" || res.lider.nivel === "director" || res.lider.nivel === "nominas")){
+          loadPrefs();
+        }
       } else {
         st.equipoData = null;
         if(st.tab === "equipo") st.tab = "activos";
@@ -1157,6 +1538,25 @@
     else if(id === "f-activar") submitActivar();
     else if(id === "f-pw") submitPw();
     else if(id === "f-add-colab") submitAddColab();
+    else if(id === "f-saldar-adeudo") submitSaldarAdeudo();
+  });
+  document.addEventListener("change", function(e){
+    if(e.target && e.target.getAttribute && e.target.getAttribute("data-action") === "pref-toggle"){
+      var pk = e.target.getAttribute("data-pref");
+      savePref(pk, !!e.target.checked);
+      return;
+    }
+    if(e.target && e.target.id === "in-saldar-file"){
+      var f = e.target.files && e.target.files[0];
+      var m = st.saldarModal;
+      if(!m || !f) return;
+      m.error = ""; m.fileInfo = null; render();
+      compressDocument(f).then(function(info){
+        if(st.saldarModal){ st.saldarModal.fileInfo = info; st.saldarModal.error = ""; render(); }
+      }).catch(function(err){
+        if(st.saldarModal){ st.saldarModal.fileInfo = null; st.saldarModal.error = err && err.message ? err.message : "No se pudo procesar el archivo."; render(); }
+      });
+    }
   });
   document.addEventListener("input", function(e){
     if(e.target && e.target.id === "in-new") updateRules();
@@ -1167,6 +1567,13 @@
     else if(e.target && e.target.id === "in-search-global"){
       st.globalQuery = e.target.value;
       render();
+    }
+    else if(e.target && e.target.id === "in-search-adeudos"){
+      st.adeudosQuery = e.target.value;
+      render();
+    }
+    else if(e.target && e.target.id === "in-saldar-motivo" && st.saldarModal){
+      st.saldarModal.motivo = e.target.value;
     }
     touch();
   });
@@ -1193,12 +1600,31 @@
         st.vistaModo = m;
         if(st.vistaModo === "global" && !st.globalData){
           loadGlobal();
+        } else if(st.vistaModo === "adeudos" && !st.adeudosData){
+          loadAdeudos();
         } else {
           render();
         }
       }
       return;
     }
+    if(a === "toggle-prefs"){ st.prefsOpen = !st.prefsOpen; render(); return; }
+    if(a === "filtro-global"){ var gf = el.getAttribute("data-f"); if(gf && gf !== st.globalFiltro){ st.globalFiltro = gf; render(); } return; }
+    if(a === "filtro-adeudos"){ var af = el.getAttribute("data-f"); if(af && af !== st.adeudosFiltro){ st.adeudosFiltro = af; render(); } return; }
+    if(a === "reload-adeudos"){ loadAdeudos(); return; }
+    if(a === "open-saldar"){
+      st.saldarModal = {
+        colaborador_id: el.getAttribute("data-id"),
+        nombre: el.getAttribute("data-nombre") || "",
+        numero_empleado: el.getAttribute("data-num") || "",
+        total: el.getAttribute("data-total") || "",
+        motivo: "", fileInfo: null, pending: false, error: ""
+      };
+      render(); return;
+    }
+    if(a === "close-saldar"){ if(!(st.saldarModal && st.saldarModal.pending)){ st.saldarModal = null; render(); } return; }
+    if(a === "saldar-backdrop"){ if(e.target === el && !(st.saldarModal && st.saldarModal.pending)){ st.saldarModal = null; render(); } return; }
+    if(a === "ver-justificante"){ openJustificante(el.getAttribute("data-path")); return; }
     if(a === "remove-sub"){
       var subId = el.getAttribute("data-id");
       var subName = el.getAttribute("data-name");

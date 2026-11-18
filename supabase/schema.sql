@@ -125,10 +125,9 @@ do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'colaboradores_puesto_largo') then
     alter table public.colaboradores add constraint colaboradores_puesto_largo check (char_length(puesto) <= 80);
   end if;
-  if not exists (select 1 from pg_constraint where conname = 'colaboradores_nivel_jerarquico_check') then
-    alter table public.colaboradores add constraint colaboradores_nivel_jerarquico_check
-      check (nivel_jerarquico in ('director_general', 'director', 'gerente', 'supervisor', 'operativo'));
-  end if;
+  alter table public.colaboradores drop constraint if exists colaboradores_nivel_jerarquico_check;
+  alter table public.colaboradores add constraint colaboradores_nivel_jerarquico_check
+    check (nivel_jerarquico in ('director_general', 'director', 'gerente', 'supervisor', 'nominas', 'operativo'));
 end $$;
 create unique index if not exists colaboradores_numero_activo_uq
   on public.colaboradores (numero_empleado) where activo and numero_empleado is not null;
@@ -168,7 +167,7 @@ alter table app.colaborador_huella enable row level security;
 -- Líderes con permisos de auditoría piramidal de resguardos
 create table if not exists app.portal_lider (
   colaborador_id            uuid primary key references public.colaboradores (id) on delete cascade,
-  nivel                     text not null check (nivel in ('director_general', 'director', 'gerente', 'supervisor')),
+  nivel                     text not null check (nivel in ('director_general', 'director', 'gerente', 'supervisor', 'nominas')),
   alcance_tipo              text not null default 'automatico' check (alcance_tipo in ('automatico', 'areas', 'personalizado')),
   areas                     text[] not null default '{}',
   puede_ver_costos          boolean not null default false,
@@ -177,7 +176,40 @@ create table if not exists app.portal_lider (
   invitado_por              uuid references auth.users(id),
   ultimo_acceso_auditoria   timestamptz
 );
+do $$ begin
+  alter table app.portal_lider drop constraint if exists portal_lider_nivel_check;
+  alter table app.portal_lider add constraint portal_lider_nivel_check
+    check (nivel in ('director_general', 'director', 'gerente', 'supervisor', 'nominas'));
+end $$;
 alter table app.portal_lider enable row level security;
+
+-- Preferencias de vista de consulta por líder (nunca amplían su techo de permisos)
+create table if not exists app.portal_lider_prefs (
+  colaborador_id uuid primary key references public.colaboradores (id) on delete cascade,
+  prefs          jsonb not null default '{}'::jsonb,
+  actualizado_en timestamptz not null default now()
+);
+alter table app.portal_lider_prefs enable row level security;
+
+-- Justificantes documentales de adeudos saldados por Nóminas (el binario vive en Supabase Storage)
+create table if not exists app.adeudo_justificantes (
+  id                uuid primary key default gen_random_uuid(),
+  colaborador_id    uuid not null references public.colaboradores (id) on delete cascade,
+  motivo            text not null,
+  storage_path      text not null,
+  mime_type         text not null,
+  bytes             int  not null check (bytes > 0 and bytes <= 2097152),
+  sha256            text not null check (sha256 ~ '^[0-9a-f]{64}$'),
+  nombre_archivo    text not null,
+  total_adeudo_mxn  numeric(12,2) not null default 0,
+  herramientas_cnt  int not null default 0,
+  saldado_por_id    uuid references public.colaboradores (id),
+  saldado_por_num   text,
+  saldado_por_nom   text,
+  saldado_en        timestamptz not null default now()
+);
+create index if not exists adeudo_justificantes_col_idx on app.adeudo_justificantes (colaborador_id, saldado_en desc);
+alter table app.adeudo_justificantes enable row level security;
 
 -- Personal asignado a cada líder para auditoría y supervisión de resguardos
 create table if not exists app.lider_subordinado (
@@ -2350,7 +2382,8 @@ begin
       'puesto', v_col.puesto,
       'nivel', v_lider.nivel,
       'puede_ver_costos', v_lider.puede_ver_costos,
-      'es_director', v_lider.nivel in ('director_general', 'director')
+      'es_director', v_lider.nivel in ('director_general', 'director'),
+      'es_nominas', v_lider.nivel = 'nominas'
     ),
     'resumen', jsonb_build_object(
       'total_colaboradores', (select count(*) from subordinados_unicos),
@@ -2395,13 +2428,15 @@ begin
   return v_res;
 end $$;
 
--- 11) (Portal del colaborador) Vista Global de Consulta de Resguardos (Exclusivo Directores y Director General)
+-- 11) (Portal del colaborador) Vista Global de Consulta de Resguardos (Directores, Dirección General y Nóminas)
 create or replace function public.colab_resguardos_globales(p_token text)
 returns jsonb language plpgsql volatile security definer set search_path = '' as $$
 declare
   v_id         uuid := app.portal_sesion_valida(p_token, 'activa');
   v_col        public.colaboradores%rowtype;
   v_lider      app.portal_lider%rowtype;
+  v_prefs      jsonb := '{}'::jsonb;
+  v_ver_costos boolean := false;
   v_res        jsonb;
 begin
   if v_id is null then
@@ -2411,9 +2446,15 @@ begin
   select * into v_col from public.colaboradores where id = v_id;
   select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
 
-  if v_lider.colaborador_id is null or v_lider.nivel not in ('director_general', 'director') then
-    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'La vista global de auditoría es exclusiva para Directores y Dirección General.');
+  if v_lider.colaborador_id is null or v_lider.nivel not in ('director_general', 'director', 'nominas') then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'La vista global de auditoría es exclusiva para Directores, Dirección General y Nóminas.');
   end if;
+
+  select coalesce(prefs, '{}'::jsonb) into v_prefs
+    from app.portal_lider_prefs
+   where colaborador_id = v_id;
+
+  v_ver_costos := v_lider.puede_ver_costos and coalesce((v_prefs->>'mostrar_costos')::boolean, true);
 
   with resguardos_full as (
     select 
@@ -2424,8 +2465,8 @@ begin
       r.condicion,
       r.occ,
       r.id_articulo,
-      r.costo_unitario,
-      (r.costo_unitario * r.cantidad) as costo_total,
+      case when v_ver_costos then r.costo_unitario else null end as costo_unitario,
+      case when v_ver_costos then (r.costo_unitario * r.cantidad) else null end as costo_total,
       r.estado,
       r.fecha_devolucion,
       r.creado_por,
@@ -2447,13 +2488,15 @@ begin
     'lider', jsonb_build_object(
       'nombre', v_col.nombre,
       'puesto', v_col.puesto,
-      'nivel', v_lider.nivel
+      'nivel', v_lider.nivel,
+      'puede_ver_costos', v_lider.puede_ver_costos,
+      'mostrando_costos', v_ver_costos
     ),
     'resumen', jsonb_build_object(
       'total_resguardos_activos', (select count(*) from resguardos_full),
       'total_piezas', (select coalesce(sum(cantidad), 0) from resguardos_full),
       'colaboradores_con_herramienta', (select count(distinct colaborador_numero) from resguardos_full),
-      'capital_total', (select coalesce(sum(costo_total), 0) from resguardos_full)
+      'capital_total', case when v_ver_costos then (select coalesce(sum(costo_total), 0) from resguardos_full) else null end
     ),
     'resguardos', coalesce((
       select jsonb_agg(
@@ -2603,7 +2646,7 @@ declare
 begin
   perform app.exigir(array['admin', 'supervisor']);
   
-  if p_nivel not in ('director_general', 'director', 'gerente', 'supervisor') then
+  if p_nivel not in ('director_general', 'director', 'gerente', 'supervisor', 'nominas') then
     raise exception using errcode = '22023', message = 'Nivel jerárquico no válido.';
   end if;
 
@@ -2684,6 +2727,360 @@ create policy bitacora_leer on public.bitacora for select to authenticated
 -- PERMISOS (GRANT/REVOKE). Supabase concede por defecto todo a anon y
 -- authenticated en el esquema public; aquí se retira y se concede lo mínimo.
 -- =====================================================================
+-- 15) (Portal del colaborador) Preferencias de consulta para Directores y Nóminas
+create or replace function public.colab_preferencias_get(p_token text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id    uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_lider app.portal_lider%rowtype;
+  v_raw   jsonb := '{}'::jsonb;
+  v_prefs jsonb;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+
+  select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
+  if v_lider.colaborador_id is null then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'Sin perfil de líder activo.');
+  end if;
+
+  select coalesce(prefs, '{}'::jsonb) into v_raw
+    from app.portal_lider_prefs
+   where colaborador_id = v_id;
+
+  v_prefs := jsonb_build_object(
+    'mostrar_costos', v_lider.puede_ver_costos and coalesce((v_raw->>'mostrar_costos')::boolean, true),
+    'alcance_global', coalesce(nullif(v_raw->>'alcance_global', ''), 'empresa'),
+    'alerta_auditoria', coalesce((v_raw->>'alerta_auditoria')::boolean, true),
+    'alerta_auditoria_dias', greatest(30, least(730, coalesce((v_raw->>'alerta_auditoria_dias')::int, 180))),
+    'alerta_danados', coalesce((v_raw->>'alerta_danados')::boolean, true),
+    'alerta_no_localizados', coalesce((v_raw->>'alerta_no_localizados')::boolean, true),
+    'ver_adeudos', (v_lider.nivel in ('director_general', 'director', 'nominas')) and coalesce((v_raw->>'ver_adeudos')::boolean, true)
+  );
+
+  return jsonb_build_object(
+    'ok', true,
+    'techo', jsonb_build_object(
+      'nivel', v_lider.nivel,
+      'puede_ver_costos', v_lider.puede_ver_costos,
+      'puede_saldar_adeudos', v_lider.nivel = 'nominas',
+      'puede_ver_adeudos', v_lider.nivel in ('director_general', 'director', 'nominas')
+    ),
+    'prefs', v_prefs
+  );
+end $$;
+
+-- 16) (Portal del colaborador) Guardar preferencias de consulta dentro del techo de permisos
+create or replace function public.colab_preferencias_set(p_token text, p_prefs jsonb)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id    uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_lider app.portal_lider%rowtype;
+  v_clean jsonb;
+  v_dias  int;
+  v_alc   text;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+
+  select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
+  if v_lider.colaborador_id is null then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'Sin perfil de líder activo.');
+  end if;
+
+  v_dias := greatest(30, least(730, coalesce((p_prefs->>'alerta_auditoria_dias')::int, 180)));
+  v_alc  := case when coalesce(p_prefs->>'alcance_global', 'empresa') in ('empresa', 'areas')
+                 then coalesce(p_prefs->>'alcance_global', 'empresa') else 'empresa' end;
+
+  v_clean := jsonb_build_object(
+    'mostrar_costos', v_lider.puede_ver_costos and coalesce((p_prefs->>'mostrar_costos')::boolean, true),
+    'alcance_global', v_alc,
+    'alerta_auditoria', coalesce((p_prefs->>'alerta_auditoria')::boolean, true),
+    'alerta_auditoria_dias', v_dias,
+    'alerta_danados', coalesce((p_prefs->>'alerta_danados')::boolean, true),
+    'alerta_no_localizados', coalesce((p_prefs->>'alerta_no_localizados')::boolean, true),
+    'ver_adeudos', (v_lider.nivel in ('director_general', 'director', 'nominas')) and coalesce((p_prefs->>'ver_adeudos')::boolean, true)
+  );
+
+  insert into app.portal_lider_prefs (colaborador_id, prefs, actualizado_en)
+  values (v_id, v_clean, now())
+  on conflict (colaborador_id) do update
+    set prefs = excluded.prefs,
+        actualizado_en = now();
+
+  perform app.log('preferencias_actualizadas', 'colaborador', v_id::text, v_clean);
+
+  return jsonb_build_object('ok', true, 'prefs', v_clean);
+end $$;
+
+-- 17) (Portal del colaborador) Consulta de adeudos y finiquitos (Nóminas, Directores y DG)
+create or replace function public.colab_adeudos_pendientes(p_token text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id         uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_lider      app.portal_lider%rowtype;
+  v_prefs      jsonb := '{}'::jsonb;
+  v_ver_costos boolean := false;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+
+  select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
+  if v_lider.colaborador_id is null or v_lider.nivel not in ('director_general', 'director', 'nominas') then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'Solo Dirección y Jefatura de Nóminas pueden consultar adeudos.');
+  end if;
+
+  select coalesce(prefs, '{}'::jsonb) into v_prefs
+    from app.portal_lider_prefs where colaborador_id = v_id;
+
+  v_ver_costos := v_lider.puede_ver_costos and coalesce((v_prefs->>'mostrar_costos')::boolean, true);
+
+  return (
+    with base_cols as (
+      select c.id, c.nombre, c.numero_empleado, c.puesto, c.area, c.estatus_baja, c.total_adeudo, c.creado_en
+        from public.colaboradores c
+       where c.estatus_baja in ('pendiente_cobro', 'saldado')
+          or exists (select 1 from public.resguardos r where r.colaborador_id = c.id and r.estado = 'pendiente_cobro')
+       order by (case when c.estatus_baja = 'pendiente_cobro' then 0 else 1 end), c.nombre
+    ),
+    items_por_col as (
+      select
+        r.colaborador_id,
+        jsonb_agg(
+          jsonb_build_object(
+            'id', r.id,
+            'herramienta', r.herramienta,
+            'id_articulo', r.id_articulo,
+            'cantidad', r.cantidad,
+            'fecha_prestamo', r.fecha_prestamo,
+            'costo_unitario', case when v_ver_costos then r.costo_unitario else null end,
+            'importe', case when v_ver_costos then (r.costo_unitario * r.cantidad) else null end
+          ) order by r.fecha_prestamo desc
+        ) as herramientas,
+        coalesce(sum(r.costo_unitario * r.cantidad), 0) as suma_pendiente
+      from public.resguardos r
+      where r.colaborador_id in (select id from base_cols)
+        and r.estado = 'pendiente_cobro'
+      group by r.colaborador_id
+    ),
+    cda_por_col as (
+      select distinct on (ct.colaborador_id)
+        ct.colaborador_id, ct.folio, ct.emitida_en
+      from public.constancias ct
+      where ct.tipo = 'adeudo' and ct.colaborador_id in (select id from base_cols)
+      order by ct.colaborador_id, ct.emitida_en desc
+    ),
+    just_por_col as (
+      select distinct on (aj.colaborador_id)
+        aj.colaborador_id, aj.motivo, aj.storage_path, aj.mime_type, aj.bytes,
+        aj.nombre_archivo, aj.total_adeudo_mxn, aj.herramientas_cnt,
+        aj.saldado_por_nom, aj.saldado_por_num, aj.saldado_en
+      from app.adeudo_justificantes aj
+      where aj.colaborador_id in (select id from base_cols)
+      order by aj.colaborador_id, aj.saldado_en desc
+    )
+    select jsonb_build_object(
+      'ok', true,
+      'puede_saldar', v_lider.nivel = 'nominas',
+      'mostrando_costos', v_ver_costos,
+      'resumen', jsonb_build_object(
+        'pendientes_count', (select count(*) from base_cols where estatus_baja = 'pendiente_cobro'),
+        'saldados_count', (select count(*) from base_cols where estatus_baja = 'saldado'),
+        'total_por_recuperar', case when v_ver_costos
+          then (select coalesce(sum(greatest(bc.total_adeudo, coalesce(ic.suma_pendiente, 0))), 0)
+                  from base_cols bc left join items_por_col ic on ic.colaborador_id = bc.id
+                 where bc.estatus_baja = 'pendiente_cobro')
+          else null end
+      ),
+      'adeudos', coalesce((
+        select jsonb_agg(
+          jsonb_build_object(
+            'colaborador_id', bc.id,
+            'nombre', bc.nombre,
+            'numero_empleado', bc.numero_empleado,
+            'puesto', bc.puesto,
+            'area', bc.area,
+            'estatus', bc.estatus_baja,
+            'fecha_baja', cda.emitida_en,
+            'folio_cda', cda.folio,
+            'total_adeudo', case when v_ver_costos
+              then (case when bc.estatus_baja = 'pendiente_cobro'
+                         then greatest(bc.total_adeudo, coalesce(ic.suma_pendiente, 0))
+                         else coalesce(jc.total_adeudo_mxn, 0) end)
+              else null end,
+            'herramientas', coalesce(ic.herramientas, '[]'::jsonb),
+            'justificante', case when jc.colaborador_id is not null then jsonb_build_object(
+              'motivo', jc.motivo,
+              'storage_path', jc.storage_path,
+              'mime_type', jc.mime_type,
+              'bytes', jc.bytes,
+              'nombre_archivo', jc.nombre_archivo,
+              'herramientas_cnt', jc.herramientas_cnt,
+              'saldado_por', jc.saldado_por_nom,
+              'saldado_por_num', jc.saldado_por_num,
+              'saldado_en', jc.saldado_en
+            ) else null end
+          )
+        )
+        from base_cols bc
+        left join items_por_col ic on ic.colaborador_id = bc.id
+        left join cda_por_col cda on cda.colaborador_id = bc.id
+        left join just_por_col jc on jc.colaborador_id = bc.id
+      ), '[]'::jsonb)
+    )
+  );
+end $$;
+
+-- 18) (Portal / Edge Function) Validar permiso de subida o lectura de justificante de adeudo
+create or replace function public.colab_validar_justificante_acceso(p_token text, p_accion text)
+returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id    uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_col   public.colaboradores%rowtype;
+  v_lider app.portal_lider%rowtype;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Sesión expirada o inválida.');
+  end if;
+
+  select * into v_col from public.colaboradores where id = v_id and activo;
+  select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
+
+  if v_lider.colaborador_id is null then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'Sin perfil autorizado.');
+  end if;
+
+  if p_accion = 'upload' and v_lider.nivel <> 'nominas' then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'Solo el perfil de Nóminas puede subir justificantes.');
+  elsif p_accion = 'read' and v_lider.nivel not in ('nominas', 'director_general', 'director') then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'Sin permiso para consultar justificantes.');
+  elsif p_accion not in ('upload', 'read') then
+    return jsonb_build_object('ok', false, 'error', 'parametro', 'mensaje', 'Acción no válida.');
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'colaborador_id', v_col.id,
+    'numero_empleado', v_col.numero_empleado,
+    'nombre', v_col.nombre,
+    'nivel', v_lider.nivel
+  );
+end $$;
+
+-- 19) (Portal de Nóminas) Saldar adeudo de herramienta con justificante documental obligatorio
+create or replace function public.colab_saldar_adeudo(
+  p_token          text,
+  p_colaborador_id uuid,
+  p_motivo         text,
+  p_storage_path   text,
+  p_mime_type      text,
+  p_bytes          int,
+  p_sha256         text,
+  p_nombre_archivo text
+) returns jsonb language plpgsql volatile security definer set search_path = '' as $$
+declare
+  v_id         uuid := app.portal_sesion_valida(p_token, 'activa');
+  v_nom_col    public.colaboradores%rowtype;
+  v_lider      app.portal_lider%rowtype;
+  v_target     public.colaboradores%rowtype;
+  v_motivo     text := btrim(coalesce(p_motivo, ''));
+  v_devueltos  int := 0;
+  v_total_mxn  numeric(12,2) := 0;
+begin
+  if v_id is null then
+    return jsonb_build_object('ok', false, 'error', 'sesion', 'mensaje', 'Tu sesión terminó. Vuelve a iniciar sesión.');
+  end if;
+
+  select * into v_nom_col from public.colaboradores where id = v_id and activo;
+  select * into v_lider from app.portal_lider where colaborador_id = v_id and activo;
+
+  if v_lider.colaborador_id is null or v_lider.nivel <> 'nominas' then
+    return jsonb_build_object('ok', false, 'error', 'no_autorizado', 'mensaje', 'Solo el personal de Nóminas autorizado puede saldar adeudos desde el portal.');
+  end if;
+
+  if char_length(v_motivo) < 5 or char_length(v_motivo) > 240 then
+    return jsonb_build_object('ok', false, 'error', 'motivo', 'mensaje', 'Captura un motivo o referencia de cobro/finiquito (mínimo 5 caracteres).');
+  end if;
+
+  if p_storage_path is null or p_storage_path not like (p_colaborador_id::text || '/%') then
+    return jsonb_build_object('ok', false, 'error', 'justificante', 'mensaje', 'Ruta de justificante inválida.');
+  end if;
+
+  if p_bytes is null or p_bytes <= 0 or p_bytes > 2097152 then
+    return jsonb_build_object('ok', false, 'error', 'justificante', 'mensaje', 'El justificante debe pesar entre 1 byte y 2 MB.');
+  end if;
+
+  if p_sha256 is null or p_sha256 !~ '^[0-9a-f]{64}$' then
+    return jsonb_build_object('ok', false, 'error', 'justificante', 'mensaje', 'Huella SHA-256 del justificante inválida.');
+  end if;
+
+  if p_mime_type not in ('image/webp', 'image/jpeg', 'image/png', 'application/pdf', 'application/gzip') then
+    return jsonb_build_object('ok', false, 'error', 'justificante', 'mensaje', 'Tipo de archivo no permitido.');
+  end if;
+
+  select * into v_target from public.colaboradores where id = p_colaborador_id for update;
+  if not found then
+    return jsonb_build_object('ok', false, 'error', 'no_encontrado', 'mensaje', 'Colaborador no encontrado.');
+  end if;
+
+  select coalesce(sum(costo_unitario * cantidad), 0)
+    into v_total_mxn
+    from public.resguardos
+   where colaborador_id = p_colaborador_id and estado = 'pendiente_cobro';
+
+  v_total_mxn := greatest(coalesce(v_target.total_adeudo, 0), v_total_mxn);
+
+  if v_target.estatus_baja <> 'pendiente_cobro' and not exists (
+    select 1 from public.resguardos where colaborador_id = p_colaborador_id and estado = 'pendiente_cobro'
+  ) then
+    return jsonb_build_object('ok', false, 'error', 'sin_adeudo', 'mensaje', 'Este colaborador no tiene adeudo pendiente de cobro.');
+  end if;
+
+  update public.resguardos
+     set estado = 'devuelto',
+         fecha_devolucion = app.hoy(),
+         devuelto_por = v_nom_col.nombre || ' (Nóminas · ' || v_motivo || ')',
+         actualizado_en = now()
+   where colaborador_id = p_colaborador_id and estado = 'pendiente_cobro';
+
+  get diagnostics v_devueltos = row_count;
+
+  update public.colaboradores
+     set estatus_baja = 'saldado',
+         total_adeudo = 0.00
+   where id = p_colaborador_id;
+
+  insert into app.adeudo_justificantes (
+    colaborador_id, motivo, storage_path, mime_type, bytes, sha256, nombre_archivo,
+    total_adeudo_mxn, herramientas_cnt, saldado_por_id, saldado_por_num, saldado_por_nom
+  ) values (
+    p_colaborador_id, v_motivo, p_storage_path, p_mime_type, p_bytes, p_sha256,
+    left(coalesce(nullif(btrim(p_nombre_archivo), ''), 'justificante'), 120),
+    v_total_mxn, v_devueltos, v_nom_col.id, v_nom_col.numero_empleado, v_nom_col.nombre
+  );
+
+  perform app.log('adeudo_saldado_nominas', 'colaborador', p_colaborador_id::text,
+    jsonb_build_object(
+      'colaborador', v_target.nombre,
+      'numero_empleado', v_target.numero_empleado,
+      'herramientas_saldadas', v_devueltos,
+      'total_saldado', v_total_mxn,
+      'motivo', v_motivo,
+      'justificante_path', p_storage_path,
+      'justificante_bytes', p_bytes,
+      'saldado_por', v_nom_col.nombre
+    ));
+
+  return jsonb_build_object(
+    'ok', true,
+    'herramientas_saldadas', v_devueltos,
+    'total_saldado', v_total_mxn
+  );
+end $$;
+
 revoke all on public.perfiles, public.colaboradores, public.herramientas, public.resguardos, public.bitacora, public.constancias
   from public, anon, authenticated;
 
@@ -2701,7 +3098,7 @@ grant select (id, nombre, id_articulo) on public.herramientas
 grant select (id, grupo_id, colaborador_id, herramienta, cantidad, occ, id_articulo, fecha_prestamo, fecha_devolucion, estado, notas, creado_por, devuelto_por, creado_en, condicion, revision_en, revision_resultado, revision_por, revision_nota) on public.resguardos
   to authenticated;
 
-revoke all on app.colaborador_nip, app.ajustes, app.lider_subordinado, app.solicitud_liderazgo, app.portal_lider, app.colaborador_huella from public, anon, authenticated;
+revoke all on app.colaborador_nip, app.ajustes, app.lider_subordinado, app.solicitud_liderazgo, app.portal_lider, app.portal_lider_prefs, app.adeudo_justificantes, app.colaborador_huella from public, anon, authenticated;
 
 do $$
 declare f record;
@@ -2760,6 +3157,11 @@ grant execute on function
   public.colab_remover_subordinado(text, uuid),
   public.colab_mi_equipo(text),
   public.colab_resguardos_globales(text),
+  public.colab_preferencias_get(text),
+  public.colab_preferencias_set(text, jsonb),
+  public.colab_adeudos_pendientes(text),
+  public.colab_validar_justificante_acceso(text, text),
+  public.colab_saldar_adeudo(text, uuid, text, text, text, int, text, text),
   public.colab_cambiar_password(text, text, text, text),
   public.colab_logout(text),
   public.colab_establecer_nip(text, text, text)
